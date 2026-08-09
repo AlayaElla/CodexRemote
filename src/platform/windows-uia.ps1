@@ -246,11 +246,13 @@ public static class CodexDesktopNative {
 
     # Self-test fixtures expose deterministic signals without touching UIA.
     $fixtureText = $element.PSObject.Properties['TestTextValue']
-    if ($fixtureText) {
-      $valueSupported = $true
-      $valueText = [string]$fixtureText.Value
-      $textSupported = $true
-      $textText = [string]$fixtureText.Value
+    $fixtureValue = $element.PSObject.Properties['TestValueText']
+    if ($fixtureText -or $fixtureValue) {
+      $fixturePatterns = $element.PSObject.Properties['TestPatterns']
+      $valueSupported = -not $fixturePatterns -or [bool]$fixturePatterns.Value.ValueSupported
+      $textSupported = -not $fixturePatterns -or [bool]$fixturePatterns.Value.TextSupported
+      $valueText = if ($fixtureValue) { [string]$fixtureValue.Value } else { [string]$fixtureText.Value }
+      $textText = if ($fixtureText) { [string]$fixtureText.Value } else { $null }
     } else {
       try {
         $valuePattern = $null
@@ -298,6 +300,7 @@ public static class CodexDesktopNative {
     $selectedText = $null
     $selectedSource = ''
     $placeholderDetected = $false
+    $readableSourceFound = $false
     $candidateSources = @(
       [pscustomobject]@{ Source = 'text'; Supported = $textSupported; Text = $textText },
       [pscustomobject]@{ Source = 'value'; Supported = $valueSupported; Text = $valueText },
@@ -305,15 +308,18 @@ public static class CodexDesktopNative {
     )
     foreach ($candidate in $candidateSources) {
       if (-not $candidate.Supported) { continue }
-      if (&$isPlaceholder ([string]$candidate.Text)) {
+      $readableSourceFound = $true
+      $candidateText = [string]$candidate.Text
+      if (&$isPlaceholder $candidateText) {
         $placeholderDetected = $true
         continue
       }
-      $selectedText = [string]$candidate.Text
+      if ([string]::IsNullOrWhiteSpace($candidateText)) { continue }
+      $selectedText = $candidateText
       $selectedSource = $candidate.Source
       break
     }
-    if ($null -eq $selectedText -and ($textSupported -or $valueSupported -or $legacySupported)) {
+    if ($null -eq $selectedText -and $readableSourceFound) {
       $selectedText = ''
       $selectedSource = if ($placeholderDetected) { 'placeholder' } else { 'empty' }
     }
@@ -639,8 +645,10 @@ public static class CodexDesktopNative {
       [bool]$ValueSupported = $true,
       [bool]$ValueReadOnly = $false,
       [bool]$TextSupported = $true,
-      [AllowNull()][string]$TextValue = $null
+      [AllowNull()][string]$TextValue = $null,
+      [AllowNull()][string]$ValueText = $null
     )
+    $fixtureValueText = if ($PSBoundParameters.ContainsKey('ValueText')) { $ValueText } else { $TextValue }
     return [pscustomobject]@{
       Current = [pscustomobject]@{
         ControlType = $ControlType
@@ -659,6 +667,7 @@ public static class CodexDesktopNative {
         TextSupported = $TextSupported
       }
       TestTextValue = $TextValue
+      TestValueText = $fixtureValueText
     }
   }
 
@@ -775,6 +784,16 @@ public static class CodexDesktopNative {
       Name = 'placeholder-is-empty'
       Passed = $placeholder.Readable -and -not $placeholder.HasText -and
         $placeholder.TrimmedLength -eq 0 -and $placeholder.PlaceholderDetected
+    }
+
+    $splitPatterns = Get-ElementTextMetrics (
+      New-TestElement -TextValue '' -ValueText 'recognized text')
+    $results += [pscustomobject]@{
+      Name = 'nonempty-value-beats-empty-text'
+      Passed = $splitPatterns.Readable -and $splitPatterns.HasText -and
+        $splitPatterns.SelectedSource -eq 'value' -and
+        $splitPatterns.TextPatternLength -eq 0 -and
+        $splitPatterns.ValuePatternLength -eq 15
     }
 
     $failed = @($results | Where-Object { -not $_.Passed })

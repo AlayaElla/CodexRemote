@@ -2,6 +2,8 @@
 
 这是一个面向 Windows 的 Electron PC Bridge：把 BLE、WebSocket 和 UDP 设备消息接入已经打开的 ChatGPT Desktop 窗口，并把语音、文本与状态结果回传给设备。它只操作用户当前可见的桌面窗口，不启动 Codex CLI，不保存或管理会话。
 
+![Codex Remote PC Bridge 主界面](docs/images/codex-remote-console.png)
+
 ## 功能范围
 
 - UDP `8766` 局域网发现，WebSocket `8765` 设备通道（可配置 Bearer Token）。
@@ -76,4 +78,3 @@ npm run portable    # electron-builder portable 目标
 ## 配置与安全边界
 
 服务 Token、语音 API key、Hook 端口和 WebSocket 端口通过应用设置或环境变量配置。Token、API key、Electron `userData`、transcript、日志和真实设备信息都属于运行数据，禁止提交到 Git 或公开 issue。不要把 Hook 回环地址映射到局域网或公网；公开发布前应按实际依赖补充仓库许可证声明。
-

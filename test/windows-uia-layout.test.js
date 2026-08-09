@@ -35,6 +35,9 @@ if (process.platform !== 'win32') {
   assert.equal(selector.failedCount, 0);
   assert.ok(Array.isArray(selector.selectorTests));
   assert.ok(selector.selectorTests.every((test) => test.Passed === true));
+  assert.ok(selector.selectorTests.some((test) => (
+    test.Name === 'nonempty-value-beats-empty-text' && test.Passed === true
+  )));
 
   const source = fs.readFileSync(helperPath, 'utf8');
   assert.match(source, /EnumerateTopLevelWindows/);
