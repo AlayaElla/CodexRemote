@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html class="light" lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data:; connect-src 'self'"/>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <title>Codex 远程控制台</title>
+
+  <!-- Material Symbols -->
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+  <!-- UI Fonts -->
+  <link href="https://fonts.googleapis.com" rel="preconnect"/>
+  <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+
+  <link href="app.css" rel="stylesheet"/>
+</head>
+<body class="min-h-screen flex flex-col selection:bg-primary-container selection:text-on-primary-container">
+
+  <!-- 应用内部标题栏 -->
+  <header class="window-drag-region bg-surface/80 backdrop-blur-md h-[48px] border-b border-outline-variant/30 fixed top-0 left-0 w-full z-50 flex justify-between items-center px-6">
+    <div class="flex items-center gap-2">
+      <span class="font-headline-section text-headline-section font-semibold text-primary">Codex 远程控制台</span>
+    </div>
+    <div class="window-no-drag flex items-center gap-2 text-primary">
+      <button type="button" class="icon-button" id="btn-open-settings" title="设置" aria-label="打开设置" aria-expanded="false" aria-controls="settings-drawer">
+        <span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+      </button>
+      <button type="button" class="icon-button" id="btn-win-min" title="隐藏到托盘" aria-label="隐藏到托盘">
+        <span class="material-symbols-outlined text-[20px]" data-icon="close">close</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Canvas -->
+  <main class="flex-1 min-h-screen mt-[48px] p-6 lg:p-8 flex flex-col gap-6 max-w-7xl mx-auto w-full">
+
+    <!-- Hero Card -->
+    <section class="surface-panel reveal-item p-6 relative overflow-hidden group">
+      <div class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/50 to-transparent opacity-50"></div>
+      <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative z-10">
+        <div class="space-y-1">
+          <h1 class="font-headline-display text-headline-display text-on-surface" id="device-name-hero">未绑定遥控终端</h1>
+          <div class="flex items-center gap-2 text-on-surface-variant font-body-sm text-body-sm">
+            <div class="w-2 h-2 rounded-full bg-outline" id="status-dot-hero"></div>
+            <span id="status-text-hero">等待硬件设备连接...</span>
+          </div>
+        </div>
+      <div class="bg-primary-container text-on-primary-container px-3 py-1.5 rounded-full font-body-main text-body-sm font-medium flex items-center gap-2 border border-primary/20">
+          <span class="material-symbols-outlined text-[16px]" data-icon="router">router</span>
+          <span id="hero-port-label">正在读取本机 IP...</span>
+        </div>
+      </div>
+      <div class="absolute -right-12 -bottom-12 opacity-5 pointer-events-none group-hover:opacity-10 transition-opacity duration-700">
+        <span class="material-symbols-outlined text-[120px] filled-icon" data-icon="hub">hub</span>
+      </div>
+    </section>
+
+    <!-- 3-Column Grid -->
+    <section class="grid grid-cols-1 md:grid-cols-3 gap-6 reveal-item">
+      <!-- Grid Item 1 -->
+      <div class="metric-card">
+        <div class="absolute top-0 left-0 w-full h-[1px] bg-white/40"></div>
+        <div class="flex items-center gap-2 text-on-surface-variant">
+          <span class="material-symbols-outlined" data-icon="leak_add">leak_add</span>
+          <h3 class="font-body-main text-body-main font-medium">本机连接地址</h3>
+        </div>
+        <div class="status-chip is-neutral" id="metric-ws-port">
+          正在读取本机 IP...
+        </div>
+      </div>
+
+      <!-- Grid Item 2 -->
+      <div class="metric-card">
+        <div class="absolute top-0 left-0 w-full h-[1px] bg-white/40"></div>
+        <div class="flex items-center gap-2 text-on-surface-variant">
+          <span class="material-symbols-outlined" data-icon="cable">cable</span>
+          <h3 class="font-body-main text-body-main font-medium">Codex 桥接监听</h3>
+        </div>
+        <div class="status-chip is-success" id="metric-codex-status">
+          <span class="material-symbols-outlined text-[14px]" data-icon="check_circle">check_circle</span>
+          正常就绪
+        </div>
+      </div>
+
+      <!-- Grid Item 3 -->
+      <div class="metric-card">
+        <div class="absolute top-0 left-0 w-full h-[1px] bg-white/40"></div>
+        <div class="flex items-center gap-2 text-on-surface-variant">
+          <span class="material-symbols-outlined" data-icon="mic">mic</span>
+          <h3 class="font-body-main text-body-main font-medium">语音输入</h3>
+        </div>
+        <div class="status-chip is-primary" id="metric-stt-status">
+          <span class="material-symbols-outlined text-[14px]" data-icon="bolt">bolt</span>
+          Ctrl+Shift+R
+        </div>
+      </div>
+    </section>
+
+    <!-- Activity Log Card -->
+    <section class="surface-panel reveal-item flex-1 flex flex-col min-h-[360px] relative overflow-hidden">
+      <div class="absolute top-0 left-0 w-full h-[1px] bg-white/40 z-10"></div>
+      <div class="p-5 border-b border-outline-variant/30 flex justify-between items-center bg-surface-container-lowest z-10 sticky top-0">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-on-surface-variant" data-icon="history">history</span>
+          <h2 class="font-headline-section text-headline-section text-on-surface">最近系统动态</h2>
+        </div>
+        <span class="font-body-sm text-body-sm text-on-surface-variant bg-surface-container-high px-2.5 py-1 rounded-full" id="activity-count">共 1 条记录</span>
+      </div>
+
+      <!-- Timeline Content -->
+      <div class="p-5 overflow-y-auto flex-1 space-y-4" id="activity-list">
+        <div class="flex gap-4 group">
+          <div class="flex flex-col items-center mt-1">
+            <div class="w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-primary/10"></div>
+            <div class="w-[1px] h-full bg-outline-variant/30 mt-1"></div>
+          </div>
+          <div class="flex-1 pb-4">
+            <div class="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 mb-1">
+              <span class="font-body-main text-body-sm text-on-surface-variant opacity-70">初始化</span>
+              <span class="font-body-sm text-caption-mono text-on-info-container bg-info-container px-1.5 py-0.5 rounded border border-info/20">[系统]</span>
+            </div>
+            <p class="font-body-sm text-body-sm text-on-surface">Codex 远程控制桌面端服务就绪。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Settings Overlay Drawer -->
+  <div class="fixed inset-0 bg-black/40 backdrop-blur-sm z-[60]" id="drawer-backdrop" aria-hidden="true"></div>
+
+  <div class="fixed bg-surface-container-lowest rounded-lg shadow-[0_18px_50px_rgba(0,0,0,0.18)] z-[70] flex flex-col md:flex-row border border-outline-variant/60 overflow-hidden" id="settings-drawer" role="dialog" aria-modal="true" aria-label="系统设置" aria-hidden="true" inert>
+
+    <aside class="bg-surface-container-lowest w-full md:w-64 flex flex-col border-b md:border-b-0 md:border-r border-outline-variant p-4 pt-6 gap-6 relative z-10 shrink-0">
+      <div class="flex justify-between items-center px-2">
+        <div>
+          <h2 class="font-headline-display text-headline-display text-primary">设置</h2>
+          <p class="font-body-sm text-body-sm text-on-surface-variant">系统配置</p>
+        </div>
+        <button type="button" class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-full transition-colors" id="btn-close-settings-desktop" aria-label="关闭设置">
+          <span class="material-symbols-outlined" data-icon="close">close</span>
+        </button>
+      </div>
+
+      <nav class="grid grid-cols-2 md:flex md:flex-col gap-2 overflow-x-auto md:overflow-visible hide-scrollbar">
+        <button type="button" class="drawer-nav-btn" data-subtab="subtab-config" aria-selected="true">
+          <span class="material-symbols-outlined" data-icon="settings">settings</span>
+          基础配置
+        </button>
+        <button type="button" class="drawer-nav-btn" data-subtab="subtab-asr" aria-selected="false">
+          <span class="material-symbols-outlined" data-icon="mic">mic</span>
+          语音输入
+        </button>
+        <button type="button" class="drawer-nav-btn" data-subtab="subtab-lab" aria-selected="false">
+          <span class="material-symbols-outlined" data-icon="terminal">terminal</span>
+          设备模拟
+        </button>
+        <button type="button" class="drawer-nav-btn" data-subtab="subtab-logs" aria-selected="false">
+          <span class="material-symbols-outlined" data-icon="history">history</span>
+          系统日志
+        </button>
+      </nav>
+    </aside>
+
+    <!-- Drawer Content Area -->
+    <div class="flex-1 bg-surface flex flex-col relative overflow-hidden p-6 md:p-8 overflow-y-auto">
+
+      <!-- SubTab 1: 基础配置 -->
+      <div class="sub-tab-content active space-y-6 max-w-2xl" id="subtab-config">
+        <div class="space-y-1">
+          <h3 class="font-headline-section text-headline-section text-on-surface">基础配置</h3>
+          <p class="font-body-sm text-body-sm text-on-surface-variant">配置设备通信端口和 Hook 监听。重启服务后立即生效。</p>
+        </div>
+
+        <div class="p-5 bg-surface-container-lowest border border-outline-variant/50 rounded-lg space-y-5">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <label class="font-body-main text-body-sm font-medium text-on-surface block" for="service-ws-port">WebSocket 通信端口</label>
+              <input type="number" min="1024" max="65535" step="1" id="service-ws-port" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-main text-on-surface focus:outline-none focus:border-primary"/>
+            </div>
+            <div class="space-y-2">
+              <label class="font-body-main text-body-sm font-medium text-on-surface block" for="service-hook-port">Codex 钩子端口</label>
+              <input type="number" min="1024" max="65535" step="1" id="service-hook-port" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-main text-on-surface focus:outline-none focus:border-primary"/>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <label class="font-body-main text-body-sm font-medium text-on-surface block" for="service-token">设备认证 Token</label>
+            <div class="flex items-center gap-2">
+              <input type="text" id="service-token" maxlength="16" autocomplete="off" class="min-w-0 flex-1 bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-main text-on-surface focus:outline-none focus:border-primary"/>
+              <button type="button" id="btn-generate-service-token" class="button-secondary shrink-0">自动生成</button>
+            </div>
+            <p class="font-body-sm text-body-sm text-on-surface-variant">在 Boat 的 Codex 配置中输入此 Token。手动输入支持 1–16 位；自动生成会创建 16 位随机 Token。PC 地址由设备自动发现。</p>
+          </div>
+
+          <div class="space-y-2">
+            <label class="font-body-main text-body-sm font-medium text-on-surface block" for="service-approval-mode">审批模式</label>
+            <select id="service-approval-mode" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-sm text-on-surface focus:outline-none focus:border-primary">
+              <option value="intercept">拦截并审批：Remote 决定允许或拒绝</option>
+              <option value="off">关闭提示：不显示 Remote 审批，交给 Codex 处理</option>
+            </select>
+            <p class="font-body-sm text-body-sm text-on-surface-variant">切换后需要重启服务；Codex Hook 配置本身无需重新安装。</p>
+          </div>
+
+          <div class="space-y-2">
+            <label class="font-body-main text-body-sm font-medium text-on-surface block" for="service-collector-type">Agent 事件采集器</label>
+            <select id="service-collector-type" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-sm text-on-surface focus:outline-none focus:border-primary">
+              <option value="codex-hooks">Codex Hooks</option>
+            </select>
+            <p class="font-body-sm text-body-sm text-on-surface-variant">运行时只接收 Hook HTTP 事件，不读取或修改 Codex 会话文件。</p>
+          </div>
+
+          <div class="p-4 rounded-lg border border-outline-variant/40 bg-surface-container-low space-y-2">
+            <div class="flex items-center justify-between gap-3">
+              <span class="font-body-main text-body-sm font-medium text-on-surface">Codex Hook 安装状态</span>
+              <span id="codex-hook-install-status" class="font-body-sm text-body-sm text-on-surface-variant">正在检查...</span>
+            </div>
+            <p id="codex-hook-install-path" class="font-body-sm text-body-sm text-on-surface-variant break-all"></p>
+            <button type="button" id="btn-repair-codex-hooks" class="mt-1 px-4 py-2 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface font-body-main text-body-sm font-medium hover:bg-surface-container-high transition-colors inline-flex items-center gap-2">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">build</span>
+              <span>检查并修复 Hook</span>
+            </button>
+          </div>
+
+          <div class="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-outline-variant/30">
+            <p class="pt-4 font-body-sm text-body-sm text-on-surface-variant" id="service-config-status">正在读取服务状态...</p>
+            <button type="button" class="button-primary mt-4 px-5 text-body-main shrink-0" id="btn-restart-services">
+              <span class="material-symbols-outlined text-[18px] service-restart-icon" aria-hidden="true">restart_alt</span>
+              <span>重启服务</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- SubTab 2: 语音输入 -->
+      <div class="sub-tab-content hidden space-y-6 max-w-2xl" id="subtab-asr">
+        <div class="p-5 bg-surface-container-lowest border border-outline-variant/50 rounded-lg space-y-5">
+          <div class="space-y-2">
+            <h3 class="font-headline-section text-headline-section text-on-surface">语音输入方式</h3>
+            <p class="font-body-sm text-body-sm text-on-surface-variant">选择 ChatGPT Desktop 原生语音或兼容 OpenAI 的转写 API，设备语音消息会按所选方式处理。</p>
+          </div>
+          <label class="space-y-1 block" for="voice-mode">
+            <span class="font-body-sm text-body-sm font-medium text-on-surface">处理方式</span>
+            <select id="voice-mode" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-sm text-on-surface focus:outline-none focus:border-primary">
+              <option value="native">ChatGPT 原生</option>
+              <option value="api">API</option>
+            </select>
+          </label>
+
+          <section id="voice-native-pane" class="space-y-4 border-t border-outline-variant/30 pt-4">
+            <div class="space-y-2">
+              <h4 class="font-body-main text-body-main font-medium text-on-surface">ChatGPT 原生</h4>
+              <p class="font-body-sm text-body-sm text-on-surface-variant">设备语音开始和结束时各触发一次快捷键。请将下方快捷键与 ChatGPT Desktop 设置 &gt; 语音 &gt; 语音聊天快捷键保持一致。</p>
+            </div>
+            <label class="space-y-1 block" for="voice-native-shortcut">
+              <span class="font-body-sm text-body-sm text-on-surface-variant">语音聊天快捷键</span>
+              <input type="text" id="voice-native-shortcut" value="Ctrl+Shift+R" autocomplete="off" placeholder="Ctrl+Shift+R" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-main text-on-surface focus:outline-none focus:border-primary"/>
+            </label>
+          </section>
+
+          <section id="voice-api-pane" class="hidden space-y-4 border-t border-outline-variant/30 pt-4">
+            <div class="space-y-2">
+              <h4 class="font-body-main text-body-main font-medium text-on-surface">API 转写</h4>
+              <p class="font-body-sm text-body-sm text-on-surface-variant">设备音频发送到兼容 OpenAI <code>/audio/transcriptions</code> 的 API，返回文字后自动提交到 ChatGPT Desktop。</p>
+            </div>
+            <label class="space-y-1 block" for="voice-api-base-url">
+              <span class="font-body-sm text-body-sm text-on-surface-variant">Base URL</span>
+              <input type="url" id="voice-api-base-url" autocomplete="off" placeholder="https://api.openai.com/v1" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-main text-on-surface focus:outline-none focus:border-primary"/>
+            </label>
+            <label class="space-y-1 block" for="voice-api-key">
+              <span class="font-body-sm text-body-sm text-on-surface-variant">API Key</span>
+              <input type="password" id="voice-api-key" autocomplete="off" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-main text-on-surface focus:outline-none focus:border-primary"/>
+            </label>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label class="space-y-1" for="voice-api-model">
+                <span class="font-body-sm text-body-sm text-on-surface-variant">模型</span>
+                <input type="text" id="voice-api-model" autocomplete="off" placeholder="gpt-4o-transcribe" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-3 py-2 font-body-main text-body-sm text-on-surface focus:outline-none focus:border-primary"/>
+              </label>
+              <label class="space-y-1" for="voice-api-language">
+                <span class="font-body-sm text-body-sm text-on-surface-variant">语言</span>
+                <input type="text" id="voice-api-language" autocomplete="off" placeholder="zh" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-3 py-2 font-body-main text-body-sm text-on-surface focus:outline-none focus:border-primary"/>
+              </label>
+            </div>
+            <label class="space-y-1 block" for="voice-api-input-format">
+              <span class="font-body-sm text-body-sm text-on-surface-variant">输入音频格式</span>
+              <select id="voice-api-input-format" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-3 py-2 font-body-main text-body-sm text-on-surface focus:outline-none focus:border-primary">
+                <option value="opus">裸 Opus 帧</option>
+                <option value="ogg">Ogg</option>
+                <option value="webm">WebM</option>
+                <option value="wav">WAV</option>
+                <option value="pcm16">PCM16（WAV 封装）</option>
+              </select>
+            </label>
+          </section>
+
+          <div class="flex justify-end border-t border-outline-variant/30 pt-4">
+            <button type="button" id="btn-save-voice-config" class="button-primary">保存语音设置</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- SubTab 3: 设备模拟 (Debug) -->
+      <div class="sub-tab-content hidden space-y-6 max-w-2xl" id="subtab-lab">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div class="space-y-1">
+            <h3 class="font-headline-section text-headline-section text-on-surface">ESP32 协议调试</h3>
+            <p class="font-body-sm text-body-sm text-on-surface-variant">WebSocket 双向消息与设备状态</p>
+          </div>
+          <div class="status-chip is-neutral" id="lab-device-connection" aria-live="polite">
+            <span class="material-symbols-outlined text-[14px]" aria-hidden="true">link_off</span>
+            <span>ESP32 未连接</span>
+          </div>
+        </div>
+
+        <section class="space-y-4 border-t border-outline-variant/40 pt-4" aria-labelledby="lab-downlink-title">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h4 id="lab-downlink-title" class="font-body-main text-body-main font-semibold text-on-surface">PC → ESP32</h4>
+              <p class="font-body-sm text-body-sm text-on-surface-variant">下行消息</p>
+            </div>
+            <p id="lab-device-send-status" class="font-body-sm text-body-sm text-on-surface-variant" aria-live="polite">等待发送</p>
+          </div>
+
+          <div class="flex flex-wrap gap-2" aria-label="说话按钮状态">
+            <button type="button" id="sim-status-idle" class="button-secondary">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">mic</span>
+              <span>空闲 · 说话</span>
+            </button>
+            <button type="button" id="sim-status-working" class="button-secondary">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">progress_activity</span>
+              <span>工作中 · 停止</span>
+            </button>
+            <button type="button" id="sim-status-stop" class="button-secondary">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">task_alt</span>
+              <span>任务完成</span>
+            </button>
+          </div>
+
+          <label for="lab-pc-to-esp-message" class="font-body-sm text-body-sm font-medium text-on-surface">JSON 消息</label>
+          <textarea id="lab-pc-to-esp-message" rows="4" spellcheck="false" class="w-full resize-y bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-3 font-caption-mono text-label-mono text-on-surface focus:outline-none focus:border-primary">{
+  "type": "status",
+  "state": "idle"
+}</textarea>
+          <div class="flex justify-end">
+            <button type="button" id="btn-send-device-message" class="button-primary">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">send</span>
+              <span>发送到 ESP32</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="space-y-4 border-t border-outline-variant/40 pt-4" aria-labelledby="lab-uplink-title">
+          <div>
+            <h4 id="lab-uplink-title" class="font-body-main text-body-main font-semibold text-on-surface">ESP32 → PC</h4>
+            <p class="font-body-sm text-body-sm text-on-surface-variant">模拟上行消息</p>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <button type="button" class="button-secondary justify-start" id="sim-voice-start"><span class="material-symbols-outlined text-[18px]" aria-hidden="true">mic</span><span>开始说话</span></button>
+            <button type="button" class="button-secondary justify-start" id="sim-voice-end"><span class="material-symbols-outlined text-[18px]" aria-hidden="true">stop_circle</span><span>结束说话</span></button>
+            <button type="button" class="button-secondary justify-start" id="sim-text-input"><span class="material-symbols-outlined text-[18px]" aria-hidden="true">chat</span><span>文本输入</span></button>
+            <button type="button" class="button-secondary justify-start" id="sim-turn-stop"><span class="material-symbols-outlined text-[18px]" aria-hidden="true">stop</span><span>停止任务</span></button>
+            <button type="button" class="button-secondary justify-start" id="sim-new-task"><span class="material-symbols-outlined text-[18px]" aria-hidden="true">add_comment</span><span>新任务</span></button>
+          </div>
+          <label for="lab-esp-to-pc-message" class="font-body-sm text-body-sm font-medium text-on-surface">JSON 消息</label>
+          <textarea id="lab-esp-to-pc-message" rows="4" spellcheck="false" class="w-full resize-y bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-3 font-caption-mono text-label-mono text-on-surface focus:outline-none focus:border-primary">{
+  "type": "voice_start"
+}</textarea>
+          <div class="flex items-center justify-between gap-3">
+            <p id="lab-device-receive-status" class="font-body-sm text-body-sm text-on-surface-variant" aria-live="polite">等待注入</p>
+            <button type="button" id="btn-inject-device-message" class="button-secondary shrink-0">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">input</span>
+              <span>注入到 PC</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="space-y-3 border-t border-outline-variant/40 pt-4" aria-labelledby="lab-traffic-title">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h4 id="lab-traffic-title" class="font-body-main text-body-main font-semibold text-on-surface">协议消息</h4>
+              <p class="font-body-sm text-body-sm text-on-surface-variant">最近 50 条</p>
+            </div>
+            <button type="button" id="btn-clear-device-traffic" class="icon-button" title="清空协议消息" aria-label="清空协议消息">
+              <span class="material-symbols-outlined" aria-hidden="true">delete_sweep</span>
+            </button>
+          </div>
+          <div id="lab-device-traffic" class="min-h-[160px] max-h-72 overflow-y-auto rounded-lg border border-outline-variant/50 bg-surface-container-lowest p-3 space-y-2" aria-live="polite">
+            <p id="lab-device-traffic-empty" class="font-body-sm text-body-sm text-on-surface-variant">暂无协议消息</p>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- SubTab 5: 系统日志 -->
+      <div class="sub-tab-content hidden space-y-4 max-w-2xl" id="subtab-logs">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap gap-2">
+            <button class="pill-item active px-3 py-1 rounded-full font-body-main text-body-sm font-medium bg-primary text-on-primary" data-filter="all">全部</button>
+            <button class="pill-item px-3 py-1 rounded-full font-body-main text-body-sm font-medium bg-surface-container-high text-on-surface-variant" data-filter="info">信息</button>
+            <button class="pill-item px-3 py-1 rounded-full font-body-main text-body-sm font-medium bg-surface-container-high text-on-surface-variant" data-filter="success">成功</button>
+            <button class="pill-item px-3 py-1 rounded-full font-body-main text-body-sm font-medium bg-surface-container-high text-on-surface-variant" data-filter="warning">警告</button>
+            <button class="pill-item px-3 py-1 rounded-full font-body-main text-body-sm font-medium bg-surface-container-high text-on-surface-variant" data-filter="error">异常</button>
+          </div>
+          <button class="button-secondary px-3 py-1" id="btn-clear-logs-apple">清空日志</button>
+        </div>
+
+        <div class="bg-inverse-surface text-inverse-on-surface rounded-lg p-4 font-caption-mono text-label-mono h-72 overflow-y-auto space-y-1.5" id="log-terminal-apple">
+          <!-- Log lines -->
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="fixed top-16 right-5 z-[100] w-[min(360px,calc(100vw-40px))] space-y-3 pointer-events-none" id="notice-stack" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

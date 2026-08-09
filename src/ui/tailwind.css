@@ -1,0 +1,244 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-background font-body-main text-body-main text-on-background antialiased;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    letter-spacing: 0;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer components {
+  .surface-panel {
+    @apply rounded-lg border border-outline-variant/60 bg-surface-container-lowest shadow-panel;
+  }
+
+  .metric-card {
+    @apply surface-panel relative flex flex-col gap-3 p-5 transition duration-200 ease-out;
+  }
+
+  .metric-card:hover {
+    @apply -translate-y-0.5 border-outline-variant shadow-panel-hover;
+  }
+
+  .icon-button {
+    @apply flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant transition duration-150 hover:bg-surface-container-high hover:text-on-surface active:scale-95;
+  }
+
+  .button-primary,
+  .button-secondary,
+  .button-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 font-body-main text-body-sm font-medium transition duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .button-primary {
+    @apply bg-primary text-on-primary shadow-sm hover:-translate-y-px hover:shadow-md active:translate-y-0 active:scale-[0.98];
+  }
+
+  .button-secondary {
+    @apply border border-outline-variant bg-surface-container-lowest text-on-surface hover:border-outline hover:bg-surface-container-high active:scale-[0.98];
+  }
+
+  .button-danger {
+    @apply border border-error/30 bg-error-container text-on-error-container hover:border-error/50 hover:bg-error-container/70 active:scale-[0.98];
+  }
+
+  .status-chip {
+    @apply inline-flex w-fit items-center gap-1.5 rounded-md border px-3 py-2 font-body-main text-body-sm font-medium transition duration-200 ease-out;
+  }
+
+  .status-chip.is-success {
+    @apply border-success/20 bg-success-container text-on-success-container;
+  }
+
+  .status-chip.is-neutral {
+    @apply border-outline-variant/60 bg-surface-container text-on-surface-variant;
+  }
+
+  .status-chip.is-primary {
+    @apply border-primary/20 bg-primary-container text-on-primary-container;
+  }
+
+  .status-chip.is-info {
+    @apply border-info/20 bg-info-container text-on-info-container;
+  }
+
+  .status-chip.is-warning {
+    @apply border-warning/20 bg-warning-container text-on-warning-container;
+  }
+
+  .status-chip.is-updating {
+    animation: status-update 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .drawer-nav-btn {
+    @apply flex w-full shrink-0 items-center justify-start gap-3 rounded-lg px-4 py-3 font-body-main text-body-sm font-medium text-on-surface-variant transition duration-150 hover:bg-surface-container-high hover:text-on-surface;
+  }
+
+  .drawer-nav-btn[aria-selected='true'] {
+    @apply bg-primary-container text-on-primary-container;
+  }
+
+  .sub-tab-content.is-entering {
+    animation: tab-content-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .activity-item {
+    @apply flex items-start justify-between gap-4 rounded-lg border border-outline-variant/40 bg-surface-container-low p-3 text-body-sm;
+    animation: activity-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+.filled-icon {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+#settings-drawer {
+  bottom: 16px;
+  left: 50%;
+  width: min(860px, calc(100vw - 32px));
+  height: min(640px, calc(100vh - 24px));
+  transform: translate(-50%, calc(100% + 24px)) scale(0.98);
+  opacity: 0;
+  transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1), opacity 180ms ease-out;
+}
+
+#settings-drawer.open {
+  transform: translate(-50%, 0) scale(1);
+  opacity: 1;
+}
+
+#drawer-backdrop {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 240ms ease-out;
+}
+
+#drawer-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.reveal-item {
+  animation: surface-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.reveal-item:nth-child(2) { animation-delay: 60ms; }
+.reveal-item:nth-child(3) { animation-delay: 110ms; }
+.reveal-item:nth-child(4) { animation-delay: 160ms; }
+
+.status-dot-pulse {
+  animation: pulse-ring 2s ease-out infinite;
+}
+
+.app-notice {
+  animation: notice-in 180ms ease-out both;
+}
+
+.app-notice.is-leaving {
+  animation: notice-out 150ms ease-in both;
+}
+
+.service-restart-icon.is-spinning {
+  animation: service-spin 800ms linear infinite;
+}
+
+.hide-scrollbar,
+html,
+body {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar,
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none;
+}
+
+.window-drag-region { -webkit-app-region: drag; }
+.window-no-drag { -webkit-app-region: no-drag; }
+body.drawer-open { overflow: hidden; }
+
+@keyframes surface-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tab-content-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes status-update {
+  0% { transform: scale(0.97); opacity: 0.65; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes activity-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.35); }
+  70% { box-shadow: 0 0 0 8px rgba(52, 199, 89, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 199, 89, 0); }
+}
+
+@keyframes notice-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes notice-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(-6px) scale(0.98); }
+}
+
+@keyframes service-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 767px) {
+  #settings-drawer {
+    bottom: 6px;
+    width: calc(100vw - 12px);
+    height: calc(100vh - 12px);
+  }
+
+  #settings-drawer aside { max-height: 228px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

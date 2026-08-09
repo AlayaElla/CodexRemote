@@ -1,0 +1,53 @@
+{
+  "name": "codex-remote-pc",
+  "version": "0.1.1",
+  "description": "Codex Remote Control - PC Bridge",
+  "main": "src/main.js",
+  "scripts": {
+    "test": "node test/desktop-controller.test.js && node test/device-voice-session.test.js && node test/keyboard-shortcut.test.js && node test/windows-uia-layout.test.js && node test/voice-recognizer.test.js && node test/cloud-transcription-provider.test.js && node test/service-lifecycle.test.js && node test/ws-server.test.js && node test/discovery-server.test.js && node test/codex-hook-collector.test.js && node test/agent-message-policy.test.js && node test/codex-hook-installer.test.js && node test/font-consistency.test.js",
+    "build:css": "tailwindcss -i ./src/ui/tailwind.css -o ./src/ui/app.css --minify",
+    "prestart": "npm run build:css",
+    "start": "electron .",
+    "predev": "npm run build:css",
+    "dev": "electron . --dev",
+    "prepackage": "npm run build:css",
+    "package": "npx electron-packager . CodexRemotePC --platform=win32 --arch=x64 --icon=assets/app-icon.ico --out=build/pc/unpacked --overwrite",
+    "preportable": "npm run build:css",
+    "portable": "electron-builder --win portable --x64",
+    "test:manual:ble": "node test/manual/test-ble.js",
+    "test:manual:ws": "node test/manual/test-ws.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.6.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.10",
+    "electron": "^28.0.0",
+    "electron-builder": "^26.15.3",
+    "tailwindcss": "^3.4.17"
+  },
+  "build": {
+    "appId": "com.codex.remote",
+    "productName": "Codex Remote",
+    "artifactName": "CodexRemote-Portable-${version}.${ext}",
+    "asar": true,
+    "asarUnpack": [
+      "src/platform/windows-uia.ps1"
+    ],
+    "directories": {
+      "output": "build/pc"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "hooks/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "assets/app-icon.ico",
+      "executableName": "CodexRemote"
+    }
+  }
+}

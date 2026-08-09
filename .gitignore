@@ -1,0 +1,22 @@
+# Dependencies and local runtime data
+node_modules/
+.env
+.env.*
+*.log
+.tmp/
+
+# Build and packaging output
+build/
+dist/
+dist-portable/
+release-build*/
+coverage/
+test-results/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
