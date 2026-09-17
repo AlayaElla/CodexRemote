@@ -31,11 +31,11 @@ for (const family of ['label-mono', 'caption-mono']) {
 }
 assert.equal(colors.background, '#f5f5f7');
 assert.equal(colors.primary, '#0071e3');
-assert(html.includes('ChatGPT 原生'), 'native voice mode must be visible');
+assert(html.includes('虚拟 Codex Micro'), 'Micro voice mode must be visible');
 assert(html.includes('API'), 'API voice mode must be visible');
 assert(html.includes('/audio/transcriptions'), 'API transcription endpoint guidance must be visible');
 assert(!html.includes('id="service-voice-shortcut"'), 'native shortcut must stay out of base service settings');
-assert(/id="voice-native-shortcut"/.test(html), 'native shortcut must be configurable in the native pane');
+assert(!/id="voice-native-shortcut"/.test(html), 'native Micro must not expose a desktop shortcut control');
 assert(html.includes('自动生成'), 'service token generation button must be visible');
 assert(/id="service-token"[^>]*maxlength="16"/.test(html), 'service token input must cap manual tokens at 16 characters');
 assert(html.includes('1–16'), 'service token UI must document the 1–16 character range');
@@ -48,7 +48,7 @@ for (const iconFile of ['app-icon.svg', 'app-icon.png', 'app-icon.ico']) {
   assert(fs.existsSync(path.join(__dirname, '..', 'assets', iconFile)), `missing ${iconFile}`);
 }
 assert(main.includes("'assets', 'app-icon.png'"), 'window and tray must load the application icon');
-assert(packageJson.scripts.package.includes('--icon=assets/app-icon.ico'), 'Windows package must embed the application icon');
+assert.equal(packageJson.build.win.icon, 'assets/app-icon.ico', 'Windows package must embed the application icon');
 
 const uiSource = sourceLines.join('\n');
 assert(!/<style>/i.test(html), 'UI styles must live in tailwind.css instead of app.html');

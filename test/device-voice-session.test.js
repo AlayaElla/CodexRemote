@@ -1,22 +1,33 @@
 const assert = require('assert');
+const { EventEmitter } = require('events');
 const DeviceVoiceSession = require('../src/voice/device-voice-session');
 const VoiceRecognizer = require('../src/voice/voice-recognizer');
 
-async function testNativeShortcutSession() {
+function microSubmissionOptions(context = {
+  executionState: 'idle', kind: 'local', generation: 1, draftToken: 'draft-1'
+}) {
+  return {
+    async getSubmissionContext() { return context; },
+    async getMicroLayout() {
+      return { layout: { slots: { ACT06: { action: { type: 'command', commandId: 'composer.submit' } } } } };
+    }
+  };
+}
+
+async function testMicroSessionNeverUsesDesktopOrSubmit() {
   const events = [];
-  const shortcuts = [];
+  const calls = [];
+  let active = false;
   const session = new DeviceVoiceSession({
-    voiceShortcut: 'control+shift+r',
-    desktopController: {
-      async focusInput() { events.push('focused'); return { success: true, hasText: false, nonWhitespaceLength: 0 }; },
-      async sendShortcut(shortcut) {
-        shortcuts.push(shortcut);
-        events.push('shortcut:' + shortcut);
-        return { success: true };
-      },
-      async waitForInput(options) { events.push('wait:' + options.stableMs); return { success: true, hasText: true }; },
-      async submitInput() { events.push('submit-input'); return { success: true, action: 'submit-input' }; }
+    ...microSubmissionOptions(),
+    voiceRecognizer: {
+      getStatus() { return { mode: 'virtual_micro', active, connected: true, microConnected: true }; },
+      getConfig() { return { mode: 'virtual_micro' }; },
+      async start() { active = true; calls.push('start'); return { delivery: 'submitted_to_hid', outcome: 'unknown' }; },
+      async stop() { active = false; calls.push('stop'); return { delivery: 'submitted_to_hid', outcome: 'unknown' }; },
+      async cancel() { active = false; calls.push('cancel'); return { delivery: 'submitted_to_hid', outcome: 'unknown' }; }
     },
+    async submitText() { throw new Error('Micro must not submit text'); },
     async sendToDevice(message) {
       events.push(message.type + ':' + (message.state || ''));
       return true;
@@ -30,60 +41,49 @@ async function testNativeShortcutSession() {
   const endPromise = session.handle({ type: 'voice_end', requestId: 'voice-1' });
   assert.equal((await startPromise).success, true);
   assert.equal((await endPromise).success, true);
-  assert.deepEqual(shortcuts, ['Ctrl+Shift+R', 'Ctrl+Shift+R']);
-  assert.equal(events.filter((event) => event.startsWith('shortcut:')).length, 2);
+  assert.deepEqual(calls, ['start', 'stop']);
   assert(!events.some((event) => /transcrib|voice_recognized|submitted:/.test(event)));
   assert(events.includes('ui:recording'));
-  assert(events.includes('ui:recognizing'));
-  assert(events.includes('ui:submitting'));
-  assert(events.includes('ui:submitted'));
+  assert(events.includes('ui:stopped'));
 }
 
-async function testFocusFailureReturnsDeviceError() {
-  const statuses = [];
-  let shortcutCalls = 0;
+async function testMicroNotReadyFailsWithoutDesktopCall() {
+  let desktopCalls = 0;
   const session = new DeviceVoiceSession({
-    desktopController: {
-      async focusInput() { return { success: false, error: 'editor missing' }; },
-      async sendShortcut() { shortcutCalls += 1; return { success: true }; }
+    voiceRecognizer: {
+      getStatus() { return { mode: 'virtual_micro', active: false, connected: false }; },
+      async start() { throw new Error('Codex Micro is not ready.'); }
     },
-    async sendToDevice(message) {
-      if (message.type === 'voice_status') statuses.push(message);
-      return true;
-    },
+    async sendToDevice() { return true; },
     onLog() {}
   });
-
-  const result = await session.handle({ type: 'voice_start', requestId: 'voice-2' });
+  const result = await session.handle({ type: 'voice_start', requestId: 'micro-not-ready' });
   assert.equal(result.success, false);
-  assert.equal(shortcutCalls, 0);
-  assert.deepEqual(statuses.map((item) => item.state), ['preparing', 'error']);
-  assert.equal(statuses.at(-1).requestId, 'voice-2');
-  assert.match(statuses.at(-1).message, /editor missing/);
+  assert.match(result.error, /not ready/);
+  assert.equal(desktopCalls, 0);
 }
 
-async function testShortcutFailureDoesNotReportSubmitted() {
-  const states = [];
-  const session = new DeviceVoiceSession({
-    desktopController: {
-      async focusInput() { return { success: true, hasText: false, nonWhitespaceLength: 0 }; },
-      async sendShortcut() {
-        return { success: states.length < 2, error: 'shortcut failed' };
-      },
-      async waitForInput() { return { success: true, hasText: true }; },
-      async submitInput() { return { success: true }; }
-    },
-    async sendToDevice(message) {
-      if (message.type === 'voice_status') states.push(message.state);
-      return true;
-    },
-    onLog() {}
-  });
-
-  await session.handle({ type: 'voice_start' });
-  const result = await session.handle({ type: 'voice_end' });
-  assert.equal(result.success, false);
-  assert.deepEqual(states, ['preparing', 'recording', 'error']);
+async function testMicroModeChangeAndCompatibilityCancel() {
+  const calls = [];
+  let active = false;
+  let mode = 'virtual_micro';
+  const recognizer = {
+    getStatus() { return { mode, active, connected: true, microConnected: true }; },
+    async start() { active = true; calls.push(`start:${mode}`); return { delivery: 'submitted_to_hid', outcome: 'unknown' }; },
+    async stop() { active = false; calls.push('stop'); return { delivery: 'submitted_to_hid', outcome: 'unknown' }; },
+    async cancel() { active = false; calls.push('cancel'); return { delivery: 'submitted_to_hid', outcome: 'unknown' }; }
+  };
+  const session = new DeviceVoiceSession({ voiceRecognizer: recognizer, async sendToDevice() { return true; }, onLog() {} });
+  await session.handle({ type: 'voice_start', requestId: 'mode-1' });
+  assert.equal((await session.handle({ type: 'voice_start', requestId: 'mode-1' })).idempotent, true);
+  assert.equal((await session.handle({ type: 'voice_start', requestId: 'other-request' })).success, false);
+  mode = 'api';
+  await session.handle({ type: 'voice_end', requestId: 'mode-1' });
+  mode = 'virtual_micro';
+  await session.handle({ type: 'voice_start', requestId: 'mode-2' });
+  const cancel = await session.cancelVirtualMicro('mode change');
+  assert.equal(cancel.success, true);
+  assert.deepEqual(calls, ['start:virtual_micro', 'stop', 'start:virtual_micro', 'cancel']);
 }
 
 async function testApiSessionCollectsAudioAndSubmitsText() {
@@ -92,22 +92,18 @@ async function testApiSessionCollectsAudioAndSubmitsText() {
   const chunks = [];
   let active = false;
   const session = new DeviceVoiceSession({
+    ...microSubmissionOptions(),
     voiceRecognizer: {
-      getStatus() { return { mode: 'api', active, provider: 'api', configured: true }; },
+      getStatus() { return { mode: 'api', active, provider: 'api', configured: true, acceptsAudio: true }; },
       getConfig() {
         return {
           mode: 'api',
-          native: { shortcut: 'Ctrl+Shift+R' },
           api: { apiKey: 'test-secret', baseUrl: 'https://example.test/v1', model: 'test-model' }
         };
       },
       async start() { active = true; return this.getStatus(); },
       async appendAudio(chunk) { chunks.push(Buffer.from(chunk)); return this.getStatus(); },
       async stop() { active = false; return { mode: 'api', text: 'recognized text' }; }
-    },
-    desktopController: {
-      async focusInput() { return { success: true, hasText: false, nonWhitespaceLength: 0 }; },
-      async sendShortcut() { throw new Error('API mode must not send a shortcut'); }
     },
     async submitText(text) { return { success: text === 'recognized text' }; },
     async sendToDevice(message) {
@@ -143,7 +139,6 @@ async function testApiAppendFailureCancelsWithoutTranscription() {
   });
   await recognizer.saveConfig({
     mode: 'api',
-    native: { shortcut: 'Ctrl+Shift+R' },
     api: {
       apiKey: 'test-secret',
       baseUrl: 'https://example.test/v1',
@@ -159,10 +154,6 @@ async function testApiAppendFailureCancelsWithoutTranscription() {
   const statuses = [];
   const session = new DeviceVoiceSession({
     voiceRecognizer: recognizer,
-    desktopController: {
-      async focusInput() { return { success: true }; },
-      async sendShortcut() { throw new Error('API mode must not send a shortcut'); }
-    },
     async sendToDevice(message) {
       if (message.type === 'voice_status') statuses.push(message.state);
       return true;
@@ -182,184 +173,222 @@ async function testApiAppendFailureCancelsWithoutTranscription() {
   assert.deepEqual(statuses, ['preparing', 'recording', 'error']);
 }
 
-async function testNativeFailureCancelsRecognizer() {
-  const recognizer = new VoiceRecognizer();
-  await recognizer.saveConfig({
-    mode: 'native',
-    native: { shortcut: 'Ctrl+Shift+R' },
-    api: recognizer.getConfig().api
-  });
-  let shortcutCalls = 0;
-  const session = new DeviceVoiceSession({
-    voiceRecognizer: recognizer,
-    desktopController: {
-      async focusInput() { return { success: true, hasText: false, nonWhitespaceLength: 0 }; },
-      async sendShortcut() {
-        shortcutCalls += 1;
-        return shortcutCalls === 1 ? { success: true } : { success: false, error: 'shortcut failed' };
-      },
-      async waitForInput() { return { success: true, hasText: true }; },
-      async submitInput() { return { success: true }; }
-    },
-    async sendToDevice() { return true; },
-    onLog() {}
-  });
-
-  assert.equal((await session.handle({ type: 'voice_start' })).success, true);
-  const failed = await session.handle({ type: 'voice_end' });
-  assert.equal(failed.success, false);
-  assert.equal(recognizer.getStatus().active, false);
-}
-
-function createNativeWaitHarness(options = {}) {
+async function testVirtualMicroNeverUsesDesktopOrAudioAndStopsManual() {
   const statuses = [];
   const calls = [];
-  let shortcutCalls = 0;
-  let submitCalls = 0;
+  let active = false;
   const session = new DeviceVoiceSession({
-    desktopController: {
-      async focusInput() {
-        calls.push('focus');
-        return options.initialState || { success: true, hasText: false, nonWhitespaceLength: 0 };
-      },
-      async sendShortcut() {
-        shortcutCalls += 1;
-        calls.push('shortcut');
-        return options.shortcutResult || { success: true };
-      },
-      async waitForInput(waitOptions) {
-        calls.push({ type: 'wait', options: waitOptions });
-        if (options.waitForInput) return options.waitForInput(waitOptions);
-        return { success: true, hasText: true, trimmedLength: 2, nonWhitespaceLength: 2 };
-      },
-      async submitInput() {
-        submitCalls += 1;
-        calls.push('submit-input');
-        return options.submitResult || { success: true };
-      }
+    ...microSubmissionOptions(),
+    voiceRecognizer: {
+      getStatus() { return { mode: 'virtual_micro', active, connected: true, microConnected: true }; },
+      async start() { active = true; calls.push('start'); return { delivery: 'submitted_to_hid', outcome: 'pressed' }; },
+      async stop() { active = false; calls.push('stop'); return { delivery: 'submitted_to_hid', outcome: 'unknown' }; },
+      async appendAudio() { throw new Error('virtual mode must ignore audio'); },
+      async cancel() { active = false; calls.push('cancel'); }
     },
-    nativeInputTimeoutMs: 80,
-    nativeInputPollMs: 10,
-    nativeInputStableMs: 20,
-    async sendToDevice(message) {
-      if (message.type === 'voice_status') statuses.push(message.state);
-      return true;
-    },
+    async submitText() { throw new Error('virtual mode must not submit text'); },
+    async sendToDevice(message) { if (message.type === 'voice_status') statuses.push(message); },
+    onResult() { throw new Error('virtual mode must not produce result'); },
+    onSubmitted() { throw new Error('virtual mode must not submit'); },
     onLog() {}
   });
-  return {
-    session,
-    statuses,
-    calls,
-    get shortcutCalls() { return shortcutCalls; },
-    get submitCalls() { return submitCalls; }
-  };
-}
-
-async function testNativeWaitsThroughDelayedTextAndSubmitsOnce() {
-  const sequence = [
-    { success: true, hasText: false, trimmedLength: 0, nonWhitespaceLength: 0 },
-    { success: true, hasText: false, trimmedLength: 0, nonWhitespaceLength: 0 },
-    { success: true, hasText: true, trimmedLength: 2, nonWhitespaceLength: 2 },
-    { success: true, hasText: true, trimmedLength: 2, nonWhitespaceLength: 2 }
-  ];
-  const harness = createNativeWaitHarness({
-    waitForInput: async (options) => {
-      assert.equal(options.timeoutMs, 80);
-      assert.equal(options.pollMs, 10);
-      assert.equal(options.stableMs, 20);
-      assert.equal(sequence[0].hasText, false);
-      assert.equal(sequence.at(-1).hasText, true);
-      return sequence.at(-1);
-    }
-  });
-
-  const result = await harness.session.handle({ type: 'voice_start', requestId: 'native-delay' });
-  assert.equal(result.success, true);
-  const ended = await harness.session.handle({ type: 'voice_end', requestId: 'native-delay' });
+  assert.equal((await session.handle({ type: 'voice_start', requestId: 'virtual-1' })).success, true);
+  assert.equal((await session.handleAudio({ type: 'voice_data', chunk: Buffer.from([1]) })).ignored, true);
+  const ended = await session.handle({ type: 'voice_end', requestId: 'virtual-1' });
   assert.equal(ended.success, true);
-  assert.equal(harness.submitCalls, 1);
-  assert.equal(harness.calls.filter((item) => item === 'focus').length, 1);
-  assert.equal(harness.calls.some((item) => item === 'input-state'), false);
-  assert.deepEqual(harness.statuses, ['preparing', 'recording', 'recognizing', 'submitting', 'submitted']);
-  assert.equal(harness.calls.filter((item) => item === 'submit-input').length, 1);
+  assert.deepEqual(calls, ['start', 'stop']);
+  assert.deepEqual(statuses.map((item) => item.state), ['preparing', 'recording', 'submitting', 'stopped']);
+  assert.equal(statuses.at(-1).delivery, 'submitted_to_hid');
+  assert.equal(statuses.at(-1).submission, 'send');
 }
 
-async function testNativeWhitespaceOrTimeoutDoesNotSubmit() {
-  const harness = createNativeWaitHarness({
-    waitForInput: async () => ({
-      success: false,
-      error: 'ChatGPT editor text did not become stable before timeout.'
-    })
+async function testEsp32VirtualMicroForwardsAudioAndDrainsBeforeRelease() {
+  const calls = [];
+  const recordings = [];
+  let active = false;
+  const session = new DeviceVoiceSession({
+    ...microSubmissionOptions(),
+    voiceRecognizer: {
+      getStatus() { return { mode: 'virtual_micro', active, acceptsAudio: true, audioSource: 'esp32' }; },
+      async start() { active = true; calls.push('ptt:down'); return { delivery: 'submitted_to_hid', acceptsAudio: true, audioSource: 'esp32' }; },
+      async appendAudio(chunk) { calls.push(`audio:${Buffer.from(chunk).toString('hex')}`); },
+      async stop() { calls.push('drain'); active = false; calls.push('ptt:up'); return { delivery: 'submitted_to_hid' }; },
+      async cancel() { active = false; calls.push('cancel'); return { delivery: 'submitted_to_hid' }; }
+    },
+    async sendToDevice(message) { if (message.type === 'voice_status') recordings.push(message); },
+    onLog() {}
   });
-  assert.equal((await harness.session.handle({ type: 'voice_start' })).success, true);
-  const result = await harness.session.handle({ type: 'voice_end' });
-  assert.equal(result.success, false);
-  assert.equal(harness.submitCalls, 0);
-  assert.deepEqual(harness.statuses, ['preparing', 'recording', 'recognizing', 'error']);
+  await session.handle({ type: 'voice_start', requestId: 'esp32-1' });
+  await session.handleAudio({ type: 'voice_data', requestId: 'esp32-1', chunk: Buffer.from([0xaa, 0xbb]) });
+  await session.handle({ type: 'voice_end', requestId: 'esp32-1' });
+  assert.deepEqual(calls, ['ptt:down', 'audio:aabb', 'drain', 'ptt:up']);
+  assert.equal(recordings.find(item => item.state === 'recording').audioSource, 'esp32');
+  assert.equal(recordings.find(item => item.state === 'recording').acceptsAudio, true);
 }
 
-async function testNativeExistingDraftFailsBeforeShortcut() {
-  const harness = createNativeWaitHarness({
-    initialState: { success: true, hasText: true, trimmedLength: 5, nonWhitespaceLength: 5 }
+async function testVirtualMicroRequestOwnershipPreventsCompetingPtt() {
+  const calls = [];
+  const statuses = [];
+  let active = false;
+  const session = new DeviceVoiceSession({
+    ...microSubmissionOptions(),
+    voiceRecognizer: {
+      getStatus() { return { mode: 'virtual_micro', active }; },
+      async start() { active = true; calls.push('start'); return { delivery: 'submitted_to_hid', outcome: 'pressed' }; },
+      async stop() { active = false; calls.push('stop'); return { delivery: 'submitted_to_hid' }; },
+      async cancel() { active = false; calls.push('cancel'); }
+    },
+    async sendToDevice(message) { if (message.type === 'voice_status') statuses.push(message); },
+    onLog() {}
   });
-  const result = await harness.session.handle({ type: 'voice_start' });
-  assert.equal(result.success, false);
-  assert.equal(harness.shortcutCalls, 0);
-  assert.equal(harness.calls.some((item) => item && item.type === 'wait'), false);
-  assert.deepEqual(harness.statuses, ['preparing', 'error']);
-  assert.match(result.error, /already contains a draft/);
+  assert.equal((await session.handle({ type: 'voice_start', requestId: 'ui-1' })).success, true);
+  assert.equal((await session.handle({ type: 'voice_start', requestId: 'ui-1' })).idempotent, true);
+  const competing = await session.handle({ type: 'voice_start', requestId: 'esp-2' });
+  assert.equal(competing.success, false);
+  assert.equal(active, true);
+  const wrongEnd = await session.handle({ type: 'voice_end', requestId: 'esp-2' });
+  assert.equal(wrongEnd.success, false);
+  assert.equal(active, true);
+  assert.deepEqual(calls, ['start']);
+  assert.equal((await session.handle({ type: 'voice_end', requestId: 'ui-1' })).success, true);
+  assert.deepEqual(calls, ['start', 'stop']);
+  assert.equal(statuses.filter((item) => item.state === 'recording').length, 1);
 }
 
-async function testNativeInputReadFailureDoesNotStart() {
-  const harness = createNativeWaitHarness({
-    initialState: { success: false, error: 'editor text state could not be read' }
+async function testMicroFaultPublishesAsyncError(mode = 'virtual_micro') {
+  const events = new EventEmitter();
+  const statuses = [];
+  let active = false;
+  const recognizer = {
+    on(...args) { events.on(...args); },
+    getStatus() { return { mode, active, releaseUncertain: !active }; },
+    async start() { active = true; return { delivery: 'submitted_to_hid', outcome: 'pressed' }; },
+    async cancel() { active = false; }
+  };
+  const session = new DeviceVoiceSession({
+    voiceRecognizer: recognizer,
+    async sendToDevice(message) { if (message.type === 'voice_status') statuses.push(message); },
+    onLog() {}
   });
-  const result = await harness.session.handle({ type: 'voice_start' });
-  assert.equal(result.success, false);
-  assert.equal(harness.shortcutCalls, 0);
-  assert.deepEqual(harness.statuses, ['preparing', 'error']);
-  assert.match(result.error, /could not be read/);
+  await session.handle({ type: 'voice_start', requestId: `fault-${mode}` });
+  active = false;
+  events.emit('fault', { message: 'broker disconnected' });
+  await session.operation;
+  assert.deepEqual(statuses.map((item) => item.state), ['preparing', 'recording', 'error']);
+  assert.match(statuses.at(-1).message, /broker disconnected/);
 }
 
-async function testNativeLengthChangeWaitResultIsAcceptedOnlyAfterStablePolls() {
-  let stablePolls = 0;
-  const harness = createNativeWaitHarness({
-    waitForInput: async () => {
-      const values = [
-        { length: 1, signature: 'A' },
-        { length: 1, signature: 'B' },
-        { length: 1, signature: 'B' }
-      ];
-      let previous = null;
-      for (const value of values) {
-        if (value.signature === previous) stablePolls += 1;
-        else stablePolls = 0;
-        previous = value.signature;
-      }
-      return stablePolls >= 1
-        ? { success: true, hasText: true, trimmedLength: 3, nonWhitespaceLength: 3 }
-        : { success: false, error: 'unstable' };
-    }
+async function testMicroUsesConfiguredFollowUpAndCancelsWithoutSubmit() {
+  const statuses = [];
+  const calls = [];
+  let active = false;
+  const session = new DeviceVoiceSession({
+    ...microSubmissionOptions({
+      executionState: 'running', kind: 'local', taskId: 'task-1',
+      followUpQueueMode: 'queue', composerEnterBehavior: 'cmdAlways'
+    }),
+    voiceRecognizer: {
+      getStatus() { return { mode: 'virtual_micro', active, connected: true, microConnected: true }; },
+      async start() { active = true; calls.push('ptt:down'); return { delivery: 'submitted_to_hid' }; },
+      async stop(options) {
+        calls.push('drain');
+        calls.push('submit:' + options.submissionKey);
+        active = false;
+        calls.push('ptt:up');
+        return { delivery: 'submitted_to_hid', submission: { delivery: 'submitted_to_desktop' } };
+      },
+      async cancel() { active = false; calls.push('cancel'); return { delivery: 'submitted_to_hid' }; }
+    },
+    async sendToDevice(message) { if (message.type === 'voice_status') statuses.push(message); },
+    onLog() {}
   });
-  assert.equal((await harness.session.handle({ type: 'voice_start' })).success, true);
-  assert.equal((await harness.session.handle({ type: 'voice_end' })).success, true);
-  assert.equal(stablePolls, 1);
-  assert.equal(harness.submitCalls, 1);
+  await session.handle({ type: 'voice_start', requestId: 'running-1' });
+  const ended = await session.handle({ type: 'voice_end', requestId: 'running-1' });
+  assert.equal(ended.submission, 'queue');
+  assert.equal(ended.submissionRequested, true);
+  assert.deepEqual(calls, ['ptt:down', 'drain', 'submit:ACT06', 'ptt:up']);
+  assert.equal(statuses.at(-1).submission, 'queue');
+  assert.equal(statuses.at(-1).submissionRequested, true);
+  assert.equal(statuses.at(-1).submissionConfirmed, false);
+
+  const duplicate = await session.handle({ type: 'voice_end', requestId: 'running-1' });
+  assert.equal(duplicate.success, false);
+  assert.equal(calls.filter(call => call.startsWith('submit:')).length, 1,
+    'a repeated voice_end must not submit the preceding dictation again');
+
+  await session.handle({ type: 'voice_start', requestId: 'cancel-1' });
+  const cancelled = await session.handle({ type: 'voice_end', requestId: 'cancel-1', cancelled: true });
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(calls.filter(call => call.startsWith('submit:')).length, 1);
+  assert.equal(calls.at(-1), 'cancel');
+}
+
+async function testMicroSkipsSubmitWhenEsp32DeliveredNoAudio() {
+  const statuses = [];
+  const calls = [];
+  let active = false;
+  const session = new DeviceVoiceSession({
+    ...microSubmissionOptions(),
+    voiceRecognizer: {
+      getStatus() { return { mode: 'virtual_micro', active, acceptsAudio: true, audioSource: 'esp32' }; },
+      async start() { active = true; return { delivery: 'submitted_to_hid', acceptsAudio: true, audioSource: 'esp32' }; },
+      async stop(options) { active = false; calls.push(options || null); return { delivery: 'submitted_to_hid' }; },
+      async cancel() { active = false; }
+    },
+    async sendToDevice(message) { if (message.type === 'voice_status') statuses.push(message); },
+    onLog() {}
+  });
+  await session.handle({ type: 'voice_start', requestId: 'empty-audio-1' });
+  const ended = await session.handle({ type: 'voice_end', requestId: 'empty-audio-1' });
+  assert.equal(ended.success, false);
+  assert.deepEqual(calls, [null], 'no device frames only releases PTT and never sends an old draft');
+  assert.deepEqual(statuses.map(status => status.state), ['preparing', 'recording', 'stopped']);
+  assert.equal(statuses.at(-1).submission, 'none');
+}
+
+async function testMicroCancelsSubmissionWhenTargetChanges() {
+  const statuses = [];
+  const calls = [];
+  let active = false;
+  let context = {
+    kind: 'local', taskId: 'task-before', executionState: 'idle', generation: 7, draftToken: null
+  };
+  const session = new DeviceVoiceSession({
+    async getSubmissionContext() { return context; },
+    async getMicroLayout() {
+      return { layout: { slots: { ACT06: { action: { type: 'command', commandId: 'composer.submit' } } } } };
+    },
+    voiceRecognizer: {
+      getStatus() { return { mode: 'virtual_micro', active }; },
+      async start() { active = true; return { delivery: 'submitted_to_hid' }; },
+      async stop(options) { active = false; calls.push(options || null); return { delivery: 'submitted_to_hid' }; },
+      async cancel() { active = false; }
+    },
+    async sendToDevice(message) { if (message.type === 'voice_status') statuses.push(message); },
+    onLog() {}
+  });
+  await session.handle({ type: 'voice_start', requestId: 'identity-1' });
+  context = { ...context, taskId: 'task-after' };
+  const ended = await session.handle({ type: 'voice_end', requestId: 'identity-1' });
+  assert.equal(ended.success, false);
+  assert.deepEqual(calls, [null], 'changed target must release PTT without a Micro submit key');
+  assert.equal(statuses.at(-1).submission, 'none');
+  assert.match(statuses.at(-1).message, /target changed/);
 }
 
 Promise.all([
-  testNativeShortcutSession(),
-  testFocusFailureReturnsDeviceError(),
-  testShortcutFailureDoesNotReportSubmitted(),
+  testMicroSessionNeverUsesDesktopOrSubmit(),
+  testMicroNotReadyFailsWithoutDesktopCall(),
+  testMicroModeChangeAndCompatibilityCancel(),
   testApiSessionCollectsAudioAndSubmitsText(),
   testApiAppendFailureCancelsWithoutTranscription(),
-  testNativeFailureCancelsRecognizer(),
-  testNativeWaitsThroughDelayedTextAndSubmitsOnce(),
-  testNativeWhitespaceOrTimeoutDoesNotSubmit(),
-  testNativeExistingDraftFailsBeforeShortcut(),
-  testNativeInputReadFailureDoesNotStart(),
-  testNativeLengthChangeWaitResultIsAcceptedOnlyAfterStablePolls()
+  testVirtualMicroNeverUsesDesktopOrAudioAndStopsManual(),
+  testEsp32VirtualMicroForwardsAudioAndDrainsBeforeRelease(),
+  testVirtualMicroRequestOwnershipPreventsCompetingPtt(),
+  testMicroFaultPublishesAsyncError(),
+  testMicroUsesConfiguredFollowUpAndCancelsWithoutSubmit(),
+  testMicroSkipsSubmitWhenEsp32DeliveredNoAudio(),
+  testMicroCancelsSubmissionWhenTargetChanges()
 ]).then(() => console.log('device voice session tests passed')).catch((error) => {
   console.error(error);
   process.exitCode = 1;

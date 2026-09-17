@@ -116,8 +116,13 @@ async function main() {
     await bridge.start();
     assert.deepEqual(fs.readdirSync(untouchedDir), [], 'collector must not touch Codex directories');
 
+    const originalObserveTranscript = collector.observeTranscript.bind(collector);
+    let releasePromptTranscript;
+    collector.observeTranscript = () => new Promise((resolve) => {
+      releasePromptTranscript = resolve;
+    });
     const userMessagePromise = waitForMessage(collector, 'chat');
-    await runHook(hookPort, {
+    const userHook = startHook(hookPort, {
       hook_event_name: 'UserPromptSubmit',
       session_id: 'session-1',
       turn_id: 'turn-1',
@@ -126,6 +131,16 @@ async function main() {
     });
     const userMessage = await userMessagePromise;
     assert.equal(userMessage.role, 'user');
+    assert.equal(userMessage.text, '用户消息');
+    assert.equal(typeof releasePromptTranscript, 'function');
+    releasePromptTranscript();
+    await userHook.completion;
+    collector.observeTranscript = originalObserveTranscript;
+    await collector.observeTranscript({
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      transcript_path: transcriptPath
+    });
 
     const commentaryText = 'I will inspect the message flow before continuing.';
     const commentaryTimestamp = new Date().toISOString();
@@ -300,6 +315,17 @@ async function main() {
     collector.approvalMode = 'intercept';
 
     assert.equal(bridge.resolveApproval('missing', 'deny'), false);
+    const expiredId = 'closed-response-test';
+    collector.pendingApprovals.set(expiredId, {
+      res: { destroyed: true, headersSent: false, writableEnded: false },
+      timer: setTimeout(() => {}, 60000), approvalKey: 'must-not-be-remembered'
+    });
+    assert.equal(bridge.resolveApproval(expiredId, 'allow_session'), false);
+    assert.equal(collector.sessionAllowedTools.has('must-not-be-remembered'), false);
+    const expiredEvent = bridgedMessages.find(message => message.type === 'approval_resolved' && message.id === expiredId);
+    assert.equal(expiredEvent.decision, null);
+    assert.equal(expiredEvent.reason, 'disconnected');
+    assert(bridgedMessages.some(message => message.type === 'approval_resolved' && message.id === approvalMessage.id && message.decision === 'allow'));
     assert.equal(bridge.sendUserInput('not supported').success, false);
     assert(bridgedMessages.some((message) => message.type === 'tool_call'));
     assert.equal(describeToolCall('Read', { file_path: 'src/main.js' }), '读取文件：src/main.js');

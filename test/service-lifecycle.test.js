@@ -73,13 +73,11 @@ async function main() {
       wsPort,
       hookPort,
       token: 'x'.repeat(16),
-      voiceShortcut: 'control+shift+r',
       collectorType: 'codex-hooks',
       approvalMode: 'off'
     });
     assert.equal(validation.success, true);
     assert.equal(validation.config.approvalMode, 'off');
-    assert.equal(validation.config.voiceShortcut, 'Ctrl+Shift+R');
     assert.equal(validation.config.token.length, 16);
     assert.equal(validateServiceConfig({ wsPort, hookPort, token: 'x' }).success, true);
     assert.equal(validateServiceConfig({ wsPort, hookPort, token: 'x'.repeat(16) }).success, true);
