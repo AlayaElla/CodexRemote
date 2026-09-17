@@ -116,6 +116,8 @@ class CodexControls extends EventEmitter {
     if (this.pending || this.isVoiceBusy()) return this._scheduleDraftResolution(draft);
     this.draftResolving = true;
     try {
+      await this.state.refreshTaskList?.();
+      if (this.closed || this.pendingNewTask !== draft) return;
       const bindings = this.state.getThreadBindings?.() || {};
       const candidates = [...new Set(Object.entries(bindings).filter(([client, thread]) =>
         !draft.bindings[client] && !Object.values(draft.bindings).includes(thread)).map(([, thread]) => thread))];
@@ -283,6 +285,8 @@ class CodexControls extends EventEmitter {
     if (action.action === 'select_task') return this._select(action.slot, generation);
     if (action.action === 'new_task') {
       if (this.pendingNewTask) throw new Error('新任务已打开，请先输入内容或选择另一个任务。');
+      await this.state.refreshTaskList?.();
+      this._guard(generation);
       const newTaskKey = commandKey(this.state.getMicroLayout(), 'newTask');
       if (!newTaskKey) throw new Error('请在 Codex 设置 → Codex Micro 中，将一个命令键绑定为“新建任务”（NEW）。');
       const snapshot = this.state.getSnapshot();

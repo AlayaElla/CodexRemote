@@ -48,6 +48,12 @@ function installMicroRuntime({ pipePath, token }) {
         } catch (_) {}
         return {
           lighting,
+          // Read the renderer's persisted-atom cache before its asynchronous
+          // disk flush. A new thread is bound here at first submission.
+          threadBindings: Object.fromEntries(Object.entries(typeof initial.b9t === 'function'
+            ? initial.b9t('client-thread-bindings-v1', {}) || {} : {}).filter(([client, thread]) =>
+              /^client-new-thread:[\w-]{1,128}$/.test(client) && typeof thread === 'string' &&
+              /^[\w-]{1,128}$/.test(thread)).slice(-128)),
           source: initial.$Zt(store.get, initial.Qtn.agentSource),
           slots: slots.map(slot => {
             const key = slot.threadKey;

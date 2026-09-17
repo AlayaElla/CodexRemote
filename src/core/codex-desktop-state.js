@@ -185,8 +185,10 @@ class CodexDesktopState extends EventEmitter {
   }
 
   getThreadBindings() {
-    const persisted = JSON.parse(this.fs.readFileSync(path.join(this.codexHome, '.codex-global-state.json'), 'utf8'));
-    return Object.fromEntries(Object.entries(persisted['electron-persisted-atom-state']?.['client-thread-bindings-v1'] || {})
+    const persisted = readJson(this.fs, path.join(this.codexHome, '.codex-global-state.json'), {});
+    const bindings = { ...persisted['electron-persisted-atom-state']?.['client-thread-bindings-v1'],
+      ...this.nativeSnapshot?.threadBindings };
+    return Object.fromEntries(Object.entries(bindings)
       .filter(([client, thread]) => /^client-new-thread:[\w-]+$/.test(client) && typeof thread === 'string' && /^[\w-]{1,128}$/.test(thread)));
   }
 

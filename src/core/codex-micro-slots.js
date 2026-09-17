@@ -22,7 +22,9 @@ function normalizeMicroSnapshot(value) {
     ? { brightnessPercent: raw.brightnessPercent, autoDimMs: raw.autoDimMs,
       activityKey: JSON.stringify(value.slots.map(slot => [slot.threadKey ?? null, slot.status ?? null, slot.selected === true])
         .concat([[typeof raw.voiceState === 'string' ? raw.voiceState.slice(0, 32) : null]])) } : null;
-  return { ...value, slots, lighting };
+  const threadBindings = Object.fromEntries(Object.entries(value.threadBindings || {}).filter(([client, thread]) =>
+    /^client-new-thread:[\w-]+$/.test(client) && typeof thread === 'string' && /^[\w-]{1,128}$/.test(thread)));
+  return { ...value, slots, lighting, threadBindings };
 }
 
 function findCodexProcess() {
