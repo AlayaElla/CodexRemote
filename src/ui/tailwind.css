@@ -89,6 +89,14 @@
     animation: status-update 320ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  #metric-stt-status:not(:disabled) {
+    @apply cursor-pointer hover:-translate-y-px hover:border-warning/40 hover:shadow-sm active:translate-y-0 active:scale-[0.98];
+  }
+
+  #metric-stt-status:disabled {
+    @apply cursor-default;
+  }
+
   .drawer-nav-btn {
     @apply flex w-full shrink-0 items-center justify-start gap-3 rounded-lg px-4 py-3 font-body-main text-body-sm font-medium text-on-surface-variant transition duration-150 hover:bg-surface-container-high hover:text-on-surface;
   }

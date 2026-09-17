@@ -162,15 +162,57 @@ document.addEventListener('DOMContentLoaded', () => {
   const serviceRestartIcon = btnRestartServices ? btnRestartServices.querySelector('.service-restart-icon') : null;
 
   const voiceModeInput = document.getElementById('voice-mode');
-  const voiceNativePane = document.getElementById('voice-native-pane');
   const voiceApiPane = document.getElementById('voice-api-pane');
-  const voiceNativeShortcutInput = document.getElementById('voice-native-shortcut');
+  const voiceVirtualMicroPane = document.getElementById('voice-virtual-micro-pane');
   const voiceApiBaseUrlInput = document.getElementById('voice-api-base-url');
   const voiceApiKeyInput = document.getElementById('voice-api-key');
   const voiceApiModelInput = document.getElementById('voice-api-model');
   const voiceApiLanguageInput = document.getElementById('voice-api-language');
   const voiceApiInputFormatInput = document.getElementById('voice-api-input-format');
   const btnSaveVoiceConfig = document.getElementById('btn-save-voice-config');
+  const voiceVirtualMicroStatus = document.getElementById('voice-virtual-micro-status');
+  const voiceVirtualMicroDetail = document.getElementById('voice-virtual-micro-detail');
+  const btnConnectVirtualMicro = document.getElementById('btn-connect-virtual-micro');
+  const btnTestVirtualMicroPtt = document.getElementById('btn-test-virtual-micro-ptt');
+  const btnRefreshVirtualMicroDriver = document.getElementById('btn-refresh-virtual-micro-driver');
+  const voiceVirtualMicroDriverStatus = document.getElementById('voice-virtual-micro-driver-status');
+  const voiceMicroAudioSource = document.getElementById('voice-micro-audio-source');
+  const voiceMicroAudioDevice = document.getElementById('voice-micro-audio-device');
+  const voiceEsp32AudioPane = document.getElementById('voice-esp32-audio-pane');
+  const voiceEsp32AudioDevicesStatus = document.getElementById('voice-esp32-audio-devices-status');
+  const voiceEsp32AudioStatus = document.getElementById('voice-esp32-audio-status');
+  const btnRefreshEsp32Audio = document.getElementById('btn-refresh-esp32-audio');
+  let audioDeviceRefreshPending = false;
+  let virtualMicroPttActive = false;
+  let virtualMicroPttDeliveryState = null;
+  let virtualMicroReadiness = {};
+  let virtualMicroConnectPending = false;
+  let latestSavedVoiceStatus = null;
+  let virtualMicroDriverChecked = false;
+  let virtualMicroDriverGeneration = 0;
+
+  function showVirtualMicroDriverResult(result, fallbackError = '') {
+    if (!voiceVirtualMicroDriverStatus) return;
+    const formatter = window.VirtualMicroDriverStatus;
+    voiceVirtualMicroDriverStatus.textContent = formatter
+      ? formatter.describe(result, fallbackError)
+      : `驱动状态检查失败。${fallbackError}`;
+  }
+
+  async function inspectVirtualMicroDriver() {
+    if (!window.electronAPI || !window.electronAPI.getVirtualMicroDriverStatus) return;
+    const generation = ++virtualMicroDriverGeneration;
+    if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = '正在检查驱动状态…';
+    try {
+      const response = await window.electronAPI.getVirtualMicroDriverStatus();
+      if (generation !== virtualMicroDriverGeneration) return;
+      showVirtualMicroDriverResult(response && response.result, response && response.error);
+      virtualMicroDriverChecked = true;
+    } catch (error) {
+      if (generation !== virtualMicroDriverGeneration) return;
+      showVirtualMicroDriverResult(null, `无法检查驱动：${error.message}`);
+    }
+  }
 
   function populateServiceConfig(config) {
     if (!config) return;
@@ -183,36 +225,174 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function setVoiceModePaneVisibility() {
     const apiMode = voiceModeInput && voiceModeInput.value === 'api';
-    if (voiceNativePane) voiceNativePane.classList.toggle('hidden', apiMode);
+    const virtualMicroMode = voiceModeInput && voiceModeInput.value === 'virtual_micro';
     if (voiceApiPane) voiceApiPane.classList.toggle('hidden', !apiMode);
+    if (voiceVirtualMicroPane) voiceVirtualMicroPane.classList.toggle('hidden', !virtualMicroMode);
+    if (virtualMicroMode && !virtualMicroDriverChecked) inspectVirtualMicroDriver();
+    setAudioSourceVisibility();
+  }
+
+  function setAudioSourceVisibility() {
+    if (voiceEsp32AudioPane) voiceEsp32AudioPane.classList.toggle('hidden', voiceMicroAudioSource && voiceMicroAudioSource.value === 'computer');
+  }
+
+  async function refreshEsp32AudioDevices() {
+    if (audioDeviceRefreshPending || !window.electronAPI || !window.electronAPI.listEsp32AudioDevices) return;
+    audioDeviceRefreshPending = true;
+    if (btnRefreshEsp32Audio) btnRefreshEsp32Audio.disabled = true;
+    try {
+      const result = await window.electronAPI.listEsp32AudioDevices();
+      if (!result || !result.success) throw new Error(result && result.error || '无法读取音频设备。');
+      const devices = Array.isArray(result.devices) ? result.devices : [];
+      if (voiceMicroAudioDevice) {
+        const selected = voiceMicroAudioDevice.value;
+        voiceMicroAudioDevice.replaceChildren(new Option('自动选择 VB-CABLE', ''));
+        for (const device of devices) voiceMicroAudioDevice.appendChild(new Option(device.name, device.id));
+        if (selected && !devices.some(device => device.id === selected)) {
+          voiceMicroAudioDevice.appendChild(new Option('已保存的设备（当前不可用）', selected));
+        }
+        voiceMicroAudioDevice.value = selected;
+      }
+      if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = devices.length
+        ? '已检测到音频通道。Codex 麦克风选择对应的 CABLE Output 后保存。'
+        : '未检测到 VB-CABLE。安装并刷新后，Codex 麦克风选择 CABLE Output。';
+    } catch (error) {
+      if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = error.message;
+    } finally {
+      audioDeviceRefreshPending = false;
+      if (btnRefreshEsp32Audio) btnRefreshEsp32Audio.disabled = false;
+    }
+  }
+
+  function selectMicroStatus(status, mode, wrapper) {
+    if (!status || typeof status !== 'object') return null;
+    if (Object.prototype.hasOwnProperty.call(status, 'voiceMode')) {
+      if (status.voiceMode === mode && status[wrapper] && typeof status[wrapper] === 'object') {
+        return {
+          configured: false,
+          connected: false,
+          microConnected: false,
+          connecting: false,
+          lastError: null,
+          ...status[wrapper]
+        };
+      }
+      // A complete service snapshot for another mode must clear prior ready
+      // state rather than leave a stale Micro connection visible.
+      return { configured: false, connected: false, microConnected: false, connecting: false, lastError: null };
+    }
+    if (Object.prototype.hasOwnProperty.call(status, 'mode')) {
+      return status.mode === mode ? status : null;
+    }
+    // Mode-less values are local patches from an IPC action.
+    return status;
+  }
+
+  function updateVirtualMicroStatus(status) {
+    const incoming = selectMicroStatus(status, 'virtual_micro', 'voiceVirtualMicro');
+    if (incoming && typeof incoming === 'object') virtualMicroReadiness = { ...virtualMicroReadiness, ...incoming };
+    const virtualMicro = virtualMicroReadiness;
+    if (!virtualMicro || !voiceVirtualMicroStatus) return;
+    const checks = [
+      `驱动：${virtualMicro.driverAvailable ? '已检测' : '未检测'}`,
+      `HID：${virtualMicro.hidEnumerated ? '已枚举' : '未枚举'}`,
+      `Micro RPC：${virtualMicro.microConnected ? '已握手' : '未握手'}`
+    ];
+    if (virtualMicro.connecting) {
+      voiceVirtualMicroStatus.textContent = '正在连接 Micro（最多 75 秒）。';
+    } else if (virtualMicro.lastError) {
+      voiceVirtualMicroStatus.textContent = `连接未就绪：${virtualMicro.lastError}`;
+    } else if (!virtualMicro.configured) {
+      voiceVirtualMicroStatus.textContent = '请先保存语音设置。';
+    } else if (virtualMicroPttDeliveryState === 'recording') {
+      voiceVirtualMicroStatus.textContent = 'PTT 已按下（录音状态以 Codex 为准）。';
+    } else if (virtualMicroPttDeliveryState === 'stopped') {
+      voiceVirtualMicroStatus.textContent = 'PTT 已松开，请在 Codex 确认并发送。';
+    } else if (virtualMicro.connected && virtualMicro.microConnected) {
+      voiceVirtualMicroStatus.textContent = virtualMicro.audioSource === 'esp32'
+        ? '已连接，请在 ESP32 上按住说话。' : '已连接，按住下方按钮说话。';
+    } else {
+      voiceVirtualMicroStatus.textContent = '尚未连接，请点击“检查并连接”。';
+    }
+    if (voiceVirtualMicroDetail) {
+      const diagnostic = virtualMicro.handshakeDiagnostics;
+      if (diagnostic && typeof diagnostic === 'object') {
+        const phaseText = {
+          starting: '开始检查',
+          opening_transport: '初始化驱动连接',
+          driver_or_hid_unavailable: '驱动或 HID 未就绪',
+          awaiting_host_reports: '等待主机报告',
+          awaiting_rpc_message: '等待完整 RPC 报文',
+          awaiting_required_rpc: '所需 RPC 未齐',
+          awaiting_response_acceptance: '等待响应确认',
+          ready: '握手完成',
+          failed: '本次检查失败'
+        }[diagnostic.failurePhase || diagnostic.phase] || '检查中';
+        const deviceStatus = diagnostic.deviceStatusSeen ? '设备状态已收到' : '设备状态未收到';
+        const initialization = `初始化：版本${diagnostic.versionSeen ? '已收到' : '未收到'}、灯光${diagnostic.lightingSeen ? '已收到' : '未收到'}`;
+        voiceVirtualMicroDetail.textContent = `上次检查：驱动${diagnostic.driverAvailable ? '可用' : '不可用'}/HID${diagnostic.hidEnumerated ? '已枚举' : '未枚举'}；${deviceStatus}；${initialization}；收到${Number(diagnostic.hostReports) || 0}报告，RPC 总数/已识别 ${Number(diagnostic.rpcRequests) || 0}/${Number(diagnostic.knownRequests) || 0}，已接受${Number(diagnostic.acceptedResponses) || 0}响应；${phaseText}`;
+      } else {
+        voiceVirtualMicroDetail.textContent = checks.join(' · ');
+      }
+    }
+    if (btnTestVirtualMicroPtt) {
+      btnTestVirtualMicroPtt.disabled = !virtualMicro.configured || !virtualMicro.connected
+        || !virtualMicro.microConnected || Boolean(virtualMicro.connecting) || virtualMicro.audioSource === 'esp32';
+      btnTestVirtualMicroPtt.title = virtualMicro.audioSource === 'esp32' ? '请使用 ESP32 上的按住说话按钮，以启动设备麦克风。' : '';
+    }
+    if (voiceEsp32AudioStatus) {
+      const audio = virtualMicro.audioBridge || {};
+      const packets = Number(audio.packets) || 0;
+      const peak = Number(audio.peak) || 0;
+      const text = audio.lastError ? `ESP32 音频：${audio.lastError}`
+        : packets > 0 ? `ESP32 已传入 ${packets} 帧音频${peak > 0.001 ? '，已检测到声音' : '，当前音量很低'}。识别结果以 Codex 为准。`
+        : audio.active ? '音频通道已打开，等待 ESP32 传入声音。'
+        : '等待 ESP32 音频。';
+      if (voiceEsp32AudioStatus.textContent !== text) voiceEsp32AudioStatus.textContent = text;
+    }
+    if (btnConnectVirtualMicro) btnConnectVirtualMicro.disabled = Boolean(virtualMicro.connecting || virtualMicroConnectPending);
   }
 
   function populateVoiceConfig(config) {
     if (!config) return;
-    if (voiceModeInput) voiceModeInput.value = config.mode === 'api' ? 'api' : 'native';
-    const native = config.native || {};
-    const api = config.api || config.cloud || {};
-    if (voiceNativeShortcutInput) voiceNativeShortcutInput.value = native.shortcut || 'Ctrl+Shift+R';
+    if (voiceModeInput) voiceModeInput.value = ['api', 'virtual_micro'].includes(config.mode) ? config.mode : 'virtual_micro';
+    const api = config.api || {};
     if (voiceApiBaseUrlInput) voiceApiBaseUrlInput.value = api.baseUrl || 'https://api.openai.com/v1';
     if (voiceApiKeyInput) voiceApiKeyInput.value = api.apiKey || '';
     if (voiceApiModelInput) voiceApiModelInput.value = api.model || 'gpt-4o-transcribe';
     if (voiceApiLanguageInput) voiceApiLanguageInput.value = api.language || 'zh';
     if (voiceApiInputFormatInput) voiceApiInputFormatInput.value = api.inputFormat || 'opus';
+    const virtualMicro = config.virtualMicro || {};
+    if (voiceMicroAudioSource) voiceMicroAudioSource.value = virtualMicro.audioSource || 'esp32';
+    if (voiceMicroAudioDevice) {
+      const deviceId = virtualMicro.audioDeviceId || '';
+      if (deviceId && !Array.from(voiceMicroAudioDevice.options).some(option => option.value === deviceId)) {
+        voiceMicroAudioDevice.appendChild(new Option('已保存的音频设备', deviceId));
+      }
+      voiceMicroAudioDevice.value = deviceId;
+    }
+    updateVirtualMicroStatus({
+      ...virtualMicro,
+      configured: config.mode === 'virtual_micro'
+    });
     setVoiceModePaneVisibility();
+    void refreshEsp32AudioDevices();
   }
 
   function collectVoiceConfig() {
     return {
-      mode: voiceModeInput && voiceModeInput.value === 'api' ? 'api' : 'native',
-      native: {
-        shortcut: voiceNativeShortcutInput ? voiceNativeShortcutInput.value.trim() : 'Ctrl+Shift+R'
-      },
+      mode: voiceModeInput && ['api', 'virtual_micro'].includes(voiceModeInput.value) ? voiceModeInput.value : 'virtual_micro',
       api: {
         baseUrl: voiceApiBaseUrlInput ? voiceApiBaseUrlInput.value.trim() : '',
         apiKey: voiceApiKeyInput ? voiceApiKeyInput.value : '',
         model: voiceApiModelInput ? voiceApiModelInput.value.trim() : '',
         language: voiceApiLanguageInput ? voiceApiLanguageInput.value.trim() : '',
         inputFormat: voiceApiInputFormatInput ? voiceApiInputFormatInput.value : 'opus'
+      },
+      virtualMicro: {
+        profile: 'codex-micro-v1',
+        audioSource: voiceMicroAudioSource ? voiceMicroAudioSource.value : 'esp32',
+        audioDeviceId: voiceMicroAudioDevice ? voiceMicroAudioDevice.value : ''
       }
     };
   }
@@ -247,7 +427,93 @@ document.addEventListener('DOMContentLoaded', () => {
     window.electronAPI.getVoiceConfig().then(populateVoiceConfig).catch(console.error);
   }
 
-  if (voiceModeInput) voiceModeInput.addEventListener('change', setVoiceModePaneVisibility);
+  if (voiceModeInput) {
+    voiceModeInput.addEventListener('change', async () => {
+      // Keep the current panel visible until its PTT release has been sent.
+      await setVirtualMicroTestPtt(false);
+      setVoiceModePaneVisibility();
+    });
+  }
+
+  if (voiceMicroAudioSource) voiceMicroAudioSource.addEventListener('change', setAudioSourceVisibility);
+  if (btnRefreshEsp32Audio) btnRefreshEsp32Audio.addEventListener('click', refreshEsp32AudioDevices);
+
+  async function connectVirtualMicro() {
+    if (!window.electronAPI || !window.electronAPI.connectVirtualMicro || virtualMicroConnectPending) return;
+    virtualMicroConnectPending = true;
+    let connectionStatus = null;
+    if (btnConnectVirtualMicro) btnConnectVirtualMicro.disabled = true;
+    if (metricStt) metricStt.disabled = true;
+    updateVirtualMicroStatus({ connecting: true, lastError: null });
+    try {
+      const result = await window.electronAPI.connectVirtualMicro();
+      connectionStatus = result && result.status;
+      updateVirtualMicroStatus({ ...(result && result.status), connecting: false });
+      if (!result || !result.success) throw new Error(result && result.error ? result.error : '无法连接虚拟 Codex Micro。');
+    } catch (error) {
+      updateVirtualMicroStatus({ connecting: false, lastError: error.message });
+    } finally {
+      virtualMicroConnectPending = false;
+      updateVirtualMicroStatus({ connecting: false });
+      const responseMode = connectionStatus && connectionStatus.mode;
+      const voiceMode = responseMode === 'api' || responseMode === 'virtual_micro'
+        ? responseMode
+        : latestSavedVoiceStatus && latestSavedVoiceStatus.voiceMode || 'virtual_micro';
+      const voiceApiConfigured = voiceMode === 'api'
+        ? Boolean(responseMode === 'api' ? connectionStatus.configured : latestSavedVoiceStatus && latestSavedVoiceStatus.voiceApiConfigured)
+        : false;
+      if (btnConnectVirtualMicro) btnConnectVirtualMicro.disabled = Boolean(virtualMicroReadiness.connecting || voiceMode === 'api');
+      updateVoiceInputMetric({ voiceMode, voiceApiConfigured, voiceVirtualMicro: virtualMicroReadiness });
+    }
+  }
+
+  if (btnConnectVirtualMicro && window.electronAPI && window.electronAPI.connectVirtualMicro) {
+    btnConnectVirtualMicro.addEventListener('click', connectVirtualMicro);
+  }
+
+  if (btnRefreshVirtualMicroDriver) btnRefreshVirtualMicroDriver.addEventListener('click', inspectVirtualMicroDriver);
+
+  async function setVirtualMicroTestPtt(active) {
+    if (!btnTestVirtualMicroPtt || virtualMicroPttActive === active || !window.electronAPI || !window.electronAPI.testVirtualMicroPtt) return;
+    if (active && btnTestVirtualMicroPtt.disabled) return;
+    virtualMicroPttActive = active;
+    btnTestVirtualMicroPtt.textContent = active ? '松开以停止 PTT' : '按住说话';
+    try {
+      const result = await window.electronAPI.testVirtualMicroPtt(active);
+      if (!result || !result.success) throw new Error(result && result.error ? result.error : 'PTT 测试失败。');
+    } catch (error) {
+      virtualMicroPttActive = false;
+      btnTestVirtualMicroPtt.textContent = '按住说话';
+      updateVirtualMicroStatus({ lastError: error.message });
+    }
+  }
+
+  if (btnTestVirtualMicroPtt) {
+    btnTestVirtualMicroPtt.textContent = '按住说话';
+    btnTestVirtualMicroPtt.addEventListener('pointerdown', (event) => {
+      if (btnTestVirtualMicroPtt.disabled) return;
+      event.preventDefault();
+      btnTestVirtualMicroPtt.setPointerCapture(event.pointerId);
+      setVirtualMicroTestPtt(true);
+    });
+    btnTestVirtualMicroPtt.addEventListener('lostpointercapture', () => setVirtualMicroTestPtt(false));
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((eventName) => {
+      btnTestVirtualMicroPtt.addEventListener(eventName, () => setVirtualMicroTestPtt(false));
+    });
+    btnTestVirtualMicroPtt.addEventListener('keydown', (event) => {
+      if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
+        event.preventDefault();
+        setVirtualMicroTestPtt(true);
+      }
+    });
+    btnTestVirtualMicroPtt.addEventListener('keyup', (event) => {
+      if (event.key === ' ' || event.key === 'Enter') {
+        event.preventDefault();
+        setVirtualMicroTestPtt(false);
+      }
+    });
+    window.addEventListener('blur', () => setVirtualMicroTestPtt(false));
+  }
 
   if (btnSaveVoiceConfig && window.electronAPI && window.electronAPI.saveVoiceConfig) {
     btnSaveVoiceConfig.addEventListener('click', async () => {
@@ -409,26 +675,47 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.electronAPI.onVoiceStatus((voiceStatus) => {
       if (!voiceStatus) return;
-      const modeLabel = voiceStatus.mode === 'api' ? 'API 转写' : 'ChatGPT 原生';
+      const modeLabel = voiceStatus.mode === 'api' ? 'API 转写' : '虚拟 Codex Micro';
       if (voiceStatus.status === 'preparing') {
         if (labVoiceStatus) labVoiceStatus.textContent = `${modeLabel} 正在准备`;
       } else if (voiceStatus.status === 'recording') {
-        if (labVoiceStatus) labVoiceStatus.textContent = `${modeLabel} 录音中`;
+        if (voiceStatus.mode === 'virtual_micro') {
+          virtualMicroPttDeliveryState = 'recording';
+          if (voiceVirtualMicroStatus) voiceVirtualMicroStatus.textContent = 'PTT 已按下（录音状态以 Codex 为准）。';
+        }
+        if (labVoiceStatus) labVoiceStatus.textContent = voiceStatus.mode === 'virtual_micro'
+          ? 'PTT 已按下（录音状态以 Codex 为准）'
+          : `${modeLabel} 录音中`;
       } else if (voiceStatus.status === 'submitting') {
         if (labVoiceStatus) labVoiceStatus.textContent = `${modeLabel} 正在提交`;
       } else if (voiceStatus.status === 'recognizing') {
         if (labVoiceStatus) labVoiceStatus.textContent = `${modeLabel} 正在转写`;
       } else if (voiceStatus.status === 'submitted') {
         if (labVoiceStatus) labVoiceStatus.textContent = `${modeLabel} 已提交`;
+      } else if (voiceStatus.status === 'stopped') {
+        if (voiceStatus.mode === 'virtual_micro') {
+          virtualMicroPttActive = false;
+          virtualMicroPttDeliveryState = 'stopped';
+          if (btnTestVirtualMicroPtt) btnTestVirtualMicroPtt.textContent = '按住说话';
+          if (voiceVirtualMicroStatus) voiceVirtualMicroStatus.textContent = 'PTT 已松开，请在 Codex 确认并发送。';
+        }
+        if (labVoiceStatus) labVoiceStatus.textContent = '录音已停止，请在 Codex 确认并发送';
       } else if (voiceStatus.status === 'idle') {
         if (labVoiceStatus) labVoiceStatus.textContent = '等待语音输入';
       } else if (voiceStatus.status === 'error') {
+        if (voiceStatus.mode === 'virtual_micro') {
+          virtualMicroPttActive = false;
+          virtualMicroPttDeliveryState = null;
+          virtualMicroReadiness = { ...virtualMicroReadiness, active: false, lastError: voiceStatus.message || virtualMicroReadiness.lastError };
+          if (btnTestVirtualMicroPtt) btnTestVirtualMicroPtt.textContent = '按住说话';
+        }
         if (labVoiceStatus) labVoiceStatus.textContent = voiceStatus.message || `${modeLabel} 处理失败`;
       }
     });
 
     window.electronAPI.onDeviceMessage((msg) => {
       addDeviceTraffic('esp-to-pc', msg, { success: true });
+      if (msg.type === 'device_battery') return;
       if (msg.type === 'text_input') {
         addActivityItem('指令接收', `收到指令：“${msg.text}”`);
       } else if (msg.type === 'voice_start') {
@@ -496,63 +783,81 @@ document.addEventListener('DOMContentLoaded', () => {
         ? `未检测到局域网 IP · 端口 ${status.wsPort}`
         : '服务未启动';
     if (heroPortLabel) {
-      heroPortLabel.textContent = connectionLabel;
-      heroPortLabel.title = lanAddresses.length > 1
+      const connectionTitle = lanAddresses.length > 1
         ? `本机局域网地址：${lanAddresses.map((address) => `${address}:${status.wsPort}`).join('、')}`
         : connectionLabel;
+      if (heroPortLabel.textContent !== connectionLabel) heroPortLabel.textContent = connectionLabel;
+      if (heroPortLabel.title !== connectionTitle) heroPortLabel.title = connectionTitle;
     }
     if (metricWsPort) {
-      metricWsPort.textContent = connectionLabel;
-      metricWsPort.title = heroPortLabel ? heroPortLabel.title : connectionLabel;
+      const metricTitle = heroPortLabel ? heroPortLabel.title : connectionLabel;
+      if (metricWsPort.textContent !== connectionLabel) metricWsPort.textContent = connectionLabel;
+      if (metricWsPort.title !== metricTitle) metricWsPort.title = metricTitle;
     }
 
     const desktopControl = status.desktopControl || {};
     const desktopAvailable = Boolean(desktopControl.available);
-    const desktopDiscovery = desktopControl.discovery || {};
-    const desktopWaitingLabel = desktopDiscovery.state === 'searching'
-      ? '正在自动检测 ChatGPT Desktop'
-      : desktopDiscovery.state === 'timeout'
-        ? '未检测到窗口（已停止自动检测）'
-        : '未检测到窗口';
     setMetricState(metricCodex, status.isRestartingServices
       ? { icon: 'progress_activity', label: '正在重启', tone: 'neutral' }
       : desktopAvailable
-        ? { icon: 'check_circle', label: 'ChatGPT Desktop', tone: 'success' }
-        : { icon: 'error', label: desktopControl.supported ? desktopWaitingLabel : '仅支持 Windows', tone: 'neutral' });
+        ? { icon: 'check_circle', label: 'Codex 已连接', tone: 'success' }
+        : { icon: 'error', label: desktopControl.supported ? '等待 Codex 连接' : '仅支持 Windows', tone: 'neutral' });
 
     if (serviceConfigStatus) {
       if (status.isRestartingServices) {
         serviceConfigStatus.textContent = '正在重启后台服务...';
       } else if (status.isWsServerRunning && status.isCodexBridgeRunning) {
         const desktopStatusLabel = desktopAvailable
-          ? 'Desktop 已连接'
-          : desktopDiscovery.state === 'timeout'
-            ? '30 秒内未检测到 ChatGPT Desktop，已停止自动检测'
-            : desktopDiscovery.state === 'searching'
-              ? '正在自动检测 ChatGPT Desktop'
-              : '等待 ChatGPT Desktop';
+          ? 'Codex 已连接'
+          : '等待 Codex 连接';
         serviceConfigStatus.textContent = `服务运行中 · 设备 WebSocket ${status.wsPort} · ${desktopStatusLabel}`;
       } else {
         serviceConfigStatus.textContent = '部分服务未运行，请检查系统日志。';
       }
     }
 
-    if (metricStt) {
-      const voiceLabel = status.voiceMode === 'api'
-        ? `API 转写${status.voiceApiConfigured ? '' : '（未配置密钥）'}`
-        : `ChatGPT 原生 · ${status.voiceShortcut || 'Ctrl+Shift+R'}`;
-      setMetricState(metricStt, {
-        icon: status.voiceMode === 'api' ? 'cloud' : 'keyboard',
-        label: voiceLabel,
-        tone: status.voiceMode === 'api' && !status.voiceApiConfigured ? 'warning' : 'primary'
-      });
+    if (status && (status.voiceMode === 'api' || status.voiceMode === 'virtual_micro')) {
+      latestSavedVoiceStatus = {
+        voiceMode: status.voiceMode,
+        voiceApiConfigured: Boolean(status.voiceApiConfigured)
+      };
     }
+    updateVoiceInputMetric(status);
+    updateVirtualMicroStatus(status);
   }
+
+  function updateVoiceInputMetric(status) {
+    if (!metricStt) return;
+    const micro = status.voiceVirtualMicro || {};
+    const isApi = status.voiceMode === 'api';
+    const canRetry = !isApi && !micro.connected && !micro.connecting;
+    const voiceLabel = isApi
+      ? 'API 转写' + (status.voiceApiConfigured ? '' : '（未配置密钥）')
+      : '虚拟 Codex Micro' + (micro.connected ? ' · 已连接' : micro.connecting ? ' · 连接中' : ' · 未就绪 · 点击重试');
+    metricStt.disabled = !canRetry;
+    metricStt.title = canRetry ? '未就绪，点击重试连接虚拟 Codex Micro' : '';
+    metricStt.setAttribute('aria-label', canRetry ? '虚拟 Codex Micro 未就绪，点击重试连接' : voiceLabel);
+    setMetricState(metricStt, { icon: isApi ? 'cloud' : 'mic', label: voiceLabel,
+      tone: (isApi ? !status.voiceApiConfigured : !micro.connected) ? 'warning' : 'primary' });
+  }
+
+  function bindVoiceInputRetry() {
+    if (!metricStt) return;
+    metricStt.addEventListener('click', () => {
+      if (!metricStt.disabled) void connectVirtualMicro();
+    });
+  }
+
+  bindVoiceInputRetry();
 
   function setMetricState(element, { icon, label, tone }) {
     if (!element) return;
     const toneClass = ['success', 'neutral', 'primary', 'info', 'warning'].includes(tone) ? tone : 'neutral';
-    element.className = `status-chip is-${toneClass}`;
+    const stateKey = `${icon}\u0000${label}\u0000${toneClass}`;
+    if (element.dataset.metricState === stateKey) return;
+    element.dataset.metricState = stateKey;
+    const className = `status-chip is-${toneClass}`;
+    if (element.className !== className) element.className = className;
     element.replaceChildren();
 
     const iconElement = document.createElement('span');
@@ -566,18 +871,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function setConnectedState(isConnected, address = '') {
+    const dotClassName = isConnected
+      ? 'w-2.5 h-2.5 rounded-full bg-success status-dot-pulse'
+      : 'w-2.5 h-2.5 rounded-full bg-outline';
+    const statusText = isConnected ? `已连接 · ${address}` : '等待硬件设备连接...';
+    const deviceName = isConnected ? `终端 ${address}` : '未绑定遥控终端';
     if (isConnected) {
       if (statusDotHero) {
-        statusDotHero.className = 'w-2.5 h-2.5 rounded-full bg-success status-dot-pulse';
+        if (statusDotHero.className !== dotClassName) statusDotHero.className = dotClassName;
       }
-      if (statusTextHero) statusTextHero.textContent = `已连接 · ${address}`;
-      if (deviceNameHero) deviceNameHero.textContent = `终端 ${address}`;
+      if (statusTextHero && statusTextHero.textContent !== statusText) statusTextHero.textContent = statusText;
+      if (deviceNameHero && deviceNameHero.textContent !== deviceName) deviceNameHero.textContent = deviceName;
     } else {
       if (statusDotHero) {
-        statusDotHero.className = 'w-2.5 h-2.5 rounded-full bg-outline';
+        if (statusDotHero.className !== dotClassName) statusDotHero.className = dotClassName;
       }
-      if (statusTextHero) statusTextHero.textContent = '等待硬件设备连接...';
-      if (deviceNameHero) deviceNameHero.textContent = '未绑定遥控终端';
+      if (statusTextHero && statusTextHero.textContent !== statusText) statusTextHero.textContent = statusText;
+      if (deviceNameHero && deviceNameHero.textContent !== deviceName) deviceNameHero.textContent = deviceName;
     }
   }
 
@@ -782,14 +1092,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateLabDeviceConnection(address) {
     if (!labDeviceConnection) return;
-    labDeviceConnection.className = `status-chip ${address ? 'is-success' : 'is-neutral'}`;
+    const className = `status-chip ${address ? 'is-success' : 'is-neutral'}`;
+    const labelText = address ? `ESP32 ${address}` : 'ESP32 未连接';
+    const iconText = address ? 'link' : 'link_off';
+    const stateKey = `${className}\u0000${iconText}\u0000${labelText}`;
+    if (labDeviceConnection.dataset.connectionState === stateKey) return;
+    labDeviceConnection.dataset.connectionState = stateKey;
+    if (labDeviceConnection.className !== className) labDeviceConnection.className = className;
     labDeviceConnection.replaceChildren();
     const icon = document.createElement('span');
     icon.className = 'material-symbols-outlined text-[14px]';
     icon.setAttribute('aria-hidden', 'true');
-    icon.textContent = address ? 'link' : 'link_off';
+    icon.textContent = iconText;
     const label = document.createElement('span');
-    label.textContent = address ? `ESP32 ${address}` : 'ESP32 未连接';
+    label.textContent = labelText;
     labDeviceConnection.append(icon, label);
   }
 

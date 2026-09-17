@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>VirtualMicroDriverInstaller</AssemblyName>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <PublishTrimmed>true</PublishTrimmed>
+    <StripSymbols>true</StripSymbols>
+    <DebugType>none</DebugType>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <DebuggerSupport>false</DebuggerSupport>
+    <EventSourceSupport>false</EventSourceSupport>
+    <StackTraceSupport>false</StackTraceSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Reuse the installer-only, reviewed driver setup code without adding it to the normal broker. -->
+    <Compile Include="../virtual-micro-broker/DriverSetup.cs" Link="DriverSetup.cs" />
+    <Compile Include="../virtual-micro-broker/DriverSetupNative.cs" Link="DriverSetupNative.cs" />
+    <Compile Include="../virtual-micro-broker/DriverPackageTrust.cs" Link="DriverPackageTrust.cs" />
+    <Compile Include="../virtual-micro-broker/DriverPayloadHashes.cs" Link="DriverPayloadHashes.cs" />
+    <Compile Include="../virtual-micro-broker/DriverPayloadHashes.g.cs" Link="DriverPayloadHashes.g.cs" />
+    <Compile Include="../virtual-micro-broker/SetupApi.cs" Link="SetupApi.cs" />
+    <Compile Include="../virtual-micro-broker/TargetMicroSelection.cs" Link="TargetMicroSelection.cs" />
+    <Compile Include="../virtual-micro-broker/NativeIo.cs" Link="NativeIo.cs" />
+    <EmbeddedResource Include="../virtual-micro-driver/CodexRemoteVirtualMicro.inf" LogicalName="DriverSetup.ExpectedInf" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="**/*SelfTests.cs" />
+  </ItemGroup>
+</Project>

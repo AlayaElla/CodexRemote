@@ -9,7 +9,7 @@ echo.
 if "%SCRIPT_EXIT_CODE%"=="0" (
     echo PC packaging completed successfully.
 ) else (
-    echo PC packaging failed with exit code %SCRIPT_EXIT_CODE%.
+    echo Packaging failed with exit code %SCRIPT_EXIT_CODE%.
 )
 echo Press any key to close this window.
 pause >nul

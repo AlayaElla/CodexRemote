@@ -20,3 +20,19 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Native build output and temporary backups
+/native/**/bin/
+/native/**/obj/
+*.tmp
+*.bak
+*.obj
+
+# Local tests and validation records
+/test/
+/native/**/tests/
+/native/**/*SelfTests.cs
+/docs/*validation*.md
+/docs/*test-guide*.md
+/docs/*-plan.md
+/docs/*-delivery.md

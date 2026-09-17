@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(EnableLocalTests)' == 'true'">
+    <DefineConstants>$(DefineConstants);LOCAL_SELF_TESTS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(EnableLocalTests)' != 'true'">
+    <Compile Remove="**/*SelfTests.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Installation, elevation, catalog verification, and PnP registration are compiled only into VirtualMicroDriverInstaller.exe. -->
+    <Compile Remove="DriverSetup.cs" />
+    <Compile Remove="DriverSetupNative.cs" />
+    <Compile Remove="DriverPackageTrust.cs" />
+    <Compile Remove="DriverPayloadHashes.cs" />
+    <Compile Remove="DriverPayloadHashes.g.cs" />
+    <Compile Remove="DriverSetupSelfTests.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,49 @@
+[Version]
+Signature="$WINDOWS NT$"
+Class=HIDClass
+ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider=%Provider%
+DriverVer=09/03/2026,1.0.0.0
+CatalogFile=CodexRemoteVirtualMicro.cat
+PnpLockdown=1
+[SourceDisksNames]
+1=%DiskName%,,,
+[SourceDisksFiles]
+CodexRemoteVirtualMicro.dll=1
+[DestinationDirs]
+UMDriverCopy=13
+[Manufacturer]
+; The inbox WUDFRd Include/Needs contract and DIRID 13 packaging used below
+; require Windows 11 (build 22000) or newer.
+%Provider%=Models,NTamd64.10.0...22000
+[Models.NTamd64.10.0...22000]
+%DeviceName%=Install,ROOT\CodexRemoteVirtualMicro
+[Install.NT]
+CopyFiles=UMDriverCopy
+Include=wudfrd.inf
+Needs=WUDFRD.NT
+[Install.NT.HW]
+AddReg=VhfReg
+Include=wudfrd.inf
+Needs=WUDFRD.NT.HW
+[Install.NT.Services]
+Include=wudfrd.inf
+Needs=WUDFRD.NT.Services
+[Install.NT.Wdf]
+UmdfService=CodexRemoteVirtualMicro, UmdfSection
+UmdfServiceOrder=CodexRemoteVirtualMicro
+[UmdfSection]
+UmdfLibraryVersion=2.15.0
+ServiceBinary=%13%\CodexRemoteVirtualMicro.dll
+[VhfReg]
+; VHF is the inbox lower filter for the UMDF source driver. VhfMode enables
+; its user-mode binding, which is then opened with a local-target file handle.
+HKR,,LowerFilters,0x00010008,"Vhf"
+HKR,,VhfMode,0x00010001,1
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
+[UMDriverCopy]
+CodexRemoteVirtualMicro.dll
+[Strings]
+Provider="CodexRemote"
+DiskName="CodexRemote Virtual Micro Driver"
+DeviceName="CodexRemote Virtual Micro"

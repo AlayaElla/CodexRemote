@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { DEFAULT_VOICE_SHORTCUT, parseShortcut } = require('./keyboard-shortcut');
 
 const SUPPORTED_COLLECTORS = new Set(['codex-hooks']);
 const APPROVAL_MODES = new Set(['intercept', 'off']);
@@ -30,20 +29,10 @@ function defaultServiceConfig() {
   const wsPort = parsePort(process.env.CODEX_REMOTE_WS_PORT, 8765);
   let hookPort = parsePort(process.env.CODEX_REMOTE_HOOK_PORT, 7777);
   if (hookPort === wsPort) hookPort = wsPort === 7777 ? 7778 : 7777;
-  let voiceShortcut = DEFAULT_VOICE_SHORTCUT;
-  if (process.env.CODEX_REMOTE_VOICE_SHORTCUT) {
-    try {
-      voiceShortcut = parseShortcut(process.env.CODEX_REMOTE_VOICE_SHORTCUT).shortcut;
-    } catch {
-      voiceShortcut = DEFAULT_VOICE_SHORTCUT;
-    }
-  }
-
   return {
     wsPort,
     hookPort,
     token: defaultToken(),
-    voiceShortcut,
     collectorType: process.env.CODEX_REMOTE_COLLECTOR || 'codex-hooks',
     approvalMode: process.env.CODEX_REMOTE_APPROVAL_MODE || 'intercept'
   };
@@ -56,13 +45,6 @@ function validateServiceConfig(input, fallback = defaultServiceConfig()) {
   const collectorType = String(source.collectorType ?? fallback.collectorType).trim();
   const approvalMode = String(source.approvalMode ?? fallback.approvalMode).trim();
   const token = String(source.token ?? fallback.token).trim();
-  let voiceShortcut;
-  try {
-    voiceShortcut = parseShortcut(String(source.voiceShortcut ?? fallback.voiceShortcut ?? DEFAULT_VOICE_SHORTCUT)).shortcut;
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-
   for (const [label, port] of [['WebSocket', wsPort], ['Hook', hookPort]]) {
     if (!Number.isInteger(port) || port < 1024 || port > 65535) {
       return { success: false, error: `${label} port must be an integer between 1024 and 65535.` };
@@ -82,7 +64,7 @@ function validateServiceConfig(input, fallback = defaultServiceConfig()) {
 
   return {
     success: true,
-    config: { wsPort, hookPort, token, voiceShortcut, collectorType, approvalMode }
+    config: { wsPort, hookPort, token, collectorType, approvalMode }
   };
 }
 

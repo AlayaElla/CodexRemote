@@ -149,18 +149,27 @@ class CodexHookCollector extends AgentEventCollector {
         return this.sendJson(res, 400, { ok: false, error: 'event_name_and_payload_required' });
       }
 
+      if (eventName === 'PermissionRequest') {
+        try {
+          await this.observeTranscript(payload);
+        } catch (error) {
+          console.warn(`[Codex] Failed to read transcript updates: ${error.message}`);
+        }
+        return this.handleApprovalRequest(req, res, payload);
+      }
+
+      const message = this.toAgentMessage(eventName, payload);
+      // Do not make the user's own message wait for transcript file I/O. This
+      // is the event that should reach the device as soon as Submit is pressed.
+      if (eventName === 'UserPromptSubmit' && message) this.emit('message', message);
+
       try {
         await this.observeTranscript(payload);
       } catch (error) {
         console.warn(`[Codex] Failed to read transcript updates: ${error.message}`);
       }
 
-      if (eventName === 'PermissionRequest') {
-        return this.handleApprovalRequest(req, res, payload);
-      }
-
-      const message = this.toAgentMessage(eventName, payload);
-      if (message) this.emit('message', message);
+      if (eventName !== 'UserPromptSubmit' && message) this.emit('message', message);
       if (eventName === 'Stop') this.releaseTranscript(payload.transcript_path);
       this.sendJson(res, 200, { ok: true });
     }).catch((error) => {
@@ -481,10 +490,11 @@ class CodexHookCollector extends AgentEventCollector {
   resolveApproval(id, decision) {
     if (!['allow', 'allow_session', 'deny'].includes(decision)) return false;
     const pending = this.pendingApprovals.get(String(id));
-    if (decision === 'allow_session' && pending) {
+    const delivered = this.finishApproval(id, decision === 'allow_session' ? 'allow' : decision, null);
+    if (decision === 'allow_session' && pending && delivered) {
       this.sessionAllowedTools.add(pending.approvalKey);
     }
-    return this.finishApproval(id, decision === 'allow_session' ? 'allow' : decision, null);
+    return delivered;
   }
 
   buildHookOutput(decision) {
@@ -515,14 +525,17 @@ class CodexHookCollector extends AgentEventCollector {
 
     const hookOutput = this.buildHookOutput(decision);
 
-    if (!pending.res.headersSent && !pending.res.destroyed) {
+    const delivered = !pending.res.headersSent && !pending.res.destroyed && !pending.res.writableEnded;
+    if (delivered) {
       this.sendJson(pending.res, 200, {
         ok: true,
         hook_output: hookOutput,
         fallback_reason: fallbackReason || null
       });
     }
-    return true;
+    this.emit('message', { type: 'approval_resolved', id: String(id), decision: delivered ? decision || null : null,
+      reason: delivered ? fallbackReason || null : 'disconnected' });
+    return delivered;
   }
 
   discardApproval(id) {
@@ -530,6 +543,7 @@ class CodexHookCollector extends AgentEventCollector {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pendingApprovals.delete(String(id));
+    this.emit('message', { type: 'approval_resolved', id: String(id), decision: null, reason: 'disconnected' });
   }
 
   readJson(req) {

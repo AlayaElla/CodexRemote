@@ -44,7 +44,7 @@ class WsServer extends EventEmitter {
       }
 
       client.isAlive = false;
-      client.ping();
+      try { client.ping(); } catch (_) { client.terminate(); }
     }, 5000);
     this.heartbeatTimer.unref?.();
   }
@@ -61,6 +61,7 @@ class WsServer extends EventEmitter {
       try {
         this.wss = new WebSocket.Server({
           port: this.port,
+          maxPayload: 512 * 1024,
           verifyClient: ({ req }, done) => done(this.isAuthorized(req), 401, 'Unauthorized')
         }, () => {
           console.log(`[WebSocket] Server started on port ${this.port}`);
@@ -90,6 +91,7 @@ class WsServer extends EventEmitter {
           });
 
           ws.on('message', (data, isBinary) => {
+            if (this.connectedClient !== ws) return;
             if (isBinary) {
               // Binary Opus Audio Frame
               this.emit('device-audio', data);
@@ -97,7 +99,7 @@ class WsServer extends EventEmitter {
               // Text JSON Control Frame
               try {
                 const message = JSON.parse(data.toString());
-                console.log('[WebSocket] Received JSON:', message);
+                console.log('[WebSocket] Received JSON type:', message?.type);
                 this.emit('device-message', message);
               } catch (err) {
                 console.error('[WebSocket] Failed to parse JSON message:', err.message);
@@ -230,7 +232,14 @@ class WsServer extends EventEmitter {
     this.isReady = false;
     this.stopHeartbeat();
     if (!server) return Promise.resolve();
-    return new Promise((resolve) => server.close(resolve));
+    // A device behind a broken network cannot acknowledge a close frame.
+    // Bound shutdown, including sockets replaced by a newer device connection.
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        for (const client of server.clients) client.terminate();
+      }, 1000);
+      server.close(() => { clearTimeout(timeout); resolve(); });
+    });
   }
 }
 
