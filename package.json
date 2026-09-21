@@ -77,6 +77,7 @@
       "minimumSystemVersion": "13.0",
       "artifactName": "CodexRemote-${version}-mac-${arch}.${ext}",
       "extendInfo": {
+        "NSMicrophoneUsageDescription": "Codex Remote captures the selected BlackHole device to send Codex voice answers to your ESP32.",
         "NSLocalNetworkUsageDescription": "Codex Remote uses the local network to connect to your ESP32 controller."
       },
       "extraResources": [

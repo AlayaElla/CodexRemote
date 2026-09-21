@@ -68,6 +68,12 @@ final class VirtualAudioOutput {
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
         ) { [weak self] _ in
             guard let self else { return }
+            // Startup may post a delayed notification even though the selected
+            // device and running engine are unchanged. Only fail a broken route.
+            do {
+                try self.validateRoute()
+                if self.engine.isRunning { return }
+            } catch {}
             self.state.lock()
             let notify = !self.stopped && self.routeError == nil
             self.routeError = "CoreAudio configuration changed; reconnect the selected BlackHole device."

@@ -108,3 +108,46 @@ node scripts/start-codex-with-inspector-macos.js --help
 | Micro 已连接但任务未同步 | 检查调试接口、Codex 当前窗口及版本兼容性 |
 
 macOS 设备端语音全流程仍需实机确认。端口验证或 Micro 握手成功仅代表对应接口可用。
+
+## 实时语音（实验性）
+
+已同步主分支 `da96bc1` 的原生语音会话控制，支持当前 Mac 客户端
+`26.915.31945`。开始、静音和结束通过实际承载语音的窗口执行；资源版本
+不匹配时会拒绝启动，不尝试使用未知接口。仍需通过独立启动器开启 Inspector。
+
+1. 安装两条独立 BlackHole 线路，例如 BlackHole 2ch 和 BlackHole 16ch。
+2. 在桥接语音设置中，将音频来源设为 ESP32 麦克风，并明确选择一条
+   BlackHole 麦克风设备（实时语音不能使用“自动选择”）。
+3. 刷新 Codex 回答音频设备，选择另一条 BlackHole 并保存。两条线路不能
+   指向同一设备；不需要修改系统默认输出。
+4. 连接设备和 Micro，选中已有任务，在设备菜单中启动“实时语音”。
+   当前任务必须提供可用的“开始语音聊天”入口；任务正在运行时该入口可能不显示。
+
+音频路径：
+
+```text
+ESP32 → 16 kHz / 60 ms Opus → Swift 解码 → BlackHole A → Codex
+Codex → BlackHole B → CoreAudio 采集与重采样 → 16 kHz / 20 ms Opus → ESP32
+```
+
+第一次采集可能需要允许麦克风权限；此处采集的是明确选择的 BlackHole
+虚拟输入。当前为轮流说话，回答期间暂停 ESP32 麦克风上行，不承诺自然插话。
+
+### 本机验证
+
+`node scripts/check-macos-audio-bridge.js` 检查 helper 协议。
+`node --test scripts/tests/*.test.js` 覆盖会话归属、路由、启动失败清理、
+Mac Inspector 身份验证等行为。
+
+合成音回传探测（仅选一条空闲的 BlackHole 用作测试回环，不代表通话配置）：
+
+```sh
+python3 scripts/probe-macos-realtime-audio.py <BlackHole设备UID> <libopus.0.dylib路径>
+```
+
+该探测器仅发送合成的 440 Hz 测试音，不读取真实麦克风，不保存音频。
+验证 16 kHz 单声道、每帧 320 样本、Opus 解码、目标频率与停止后重启。
+
+2026-09-21：本机 BlackHole 16ch 的合成音往返通过（128 帧有效音频），
+并成功读取 Mac 客户端原生语音状态。完整 Codex/ESP32 双向通话尚未验收：
+本机只有一条 BlackHole，且正在执行任务的界面没有可用的开始语音按钮。

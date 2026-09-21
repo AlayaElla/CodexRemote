@@ -29,8 +29,8 @@ async function main() {
   await assert.rejects(() => bridge.startCapture(''), /outputDeviceId/);
   const start = await bridge.startCapture('speakers', 'cable-input');
   assert.equal(start.captureId, 'capture-1');
-  assert.deepEqual(helper.requests.map(request => request.op), ['capture_list', 'capture_start']);
-  assert.equal(helper.requests[1].inputDeviceId, 'cable-input');
+  assert.deepEqual(helper.requests.map(request => request.op), ['capture_list', 'capture_list', 'capture_start']);
+  assert.equal(helper.requests[2].inputDeviceId, 'cable-input');
 
   const audio = new Promise(resolve => bridge.once('audio', resolve));
   helper.child.stdout.write(`${JSON.stringify({ event: 'capture_audio', captureId: 'capture-1', packet: 'AQI=', sampleRate: 16000, frameDuration: 20, sequence: 7 })}\n`);

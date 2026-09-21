@@ -200,6 +200,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnRefreshVirtualMicroDriver) btnRefreshVirtualMicroDriver.classList.add('hidden');
     document.getElementById('voice-virtual-micro-driver-hint')?.classList.add('hidden');
     if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = 'macOS 使用进程内 Micro Shim，无需安装 HID 驱动；原生握手状态见上方。';
+    const realtimeHint = document.getElementById('voice-realtime-status');
+    if (realtimeHint) realtimeHint.textContent = '实时语音需要两条独立 BlackHole 线路：明确选择麦克风设备，再选择另一设备接收回答。';
     virtualMicroDriverChecked = true;
   }
 
@@ -429,10 +431,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const result = await window.electronAPI.listRealtimeAudioDevices();
       if (!result.success) throw new Error(result.error);
       const current = select.value;
-      select.replaceChildren(new Option('请选择专属输出设备', ''));
+      select.replaceChildren(new Option(macHost ? '请选择独立的 BlackHole 回答设备' : '请选择专属输出设备', ''));
       for (const device of result.devices) select.appendChild(new Option(device.name || device.deviceName || device.id, device.id));
       select.value = current;
-      status.textContent = '请选择已分配给 Codex 的专属输出设备，然后保存语音设置。';
+      status.textContent = macHost
+        ? (result.devices.length < 2 ? '当前不足两条 BlackHole 线路；请安装另一版本（如 2ch 与 16ch），麦克风与回答各选一条。' : '请选择与麦克风不同的 BlackHole 设备接收回答，然后保存。')
+        : '请选择已分配给 Codex 的专属输出设备，然后保存语音设置。';
     } catch (error) { status.textContent = error.message; }
   });
 

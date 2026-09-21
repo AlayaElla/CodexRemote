@@ -38,3 +38,19 @@ Output failure closes the session, and closing an output multiple times is safe.
 Drain completion checks the exact queued frame count rather than rounded
 milliseconds. Stop/drain currently runs synchronously: EOF during that operation
 is processed after its bounded drain, not immediately.
+
+## 实时语音回答采集
+
+`capture_list` 枚举可用 BlackHole 输入/输出设备；`capture_start` 接收
+`deviceId` 与可选 `inputDeviceId`，返回 `captureId`、`name`、
+`sampleRate:16000`、`channels:1`、`frameDuration:20`。
+调用者必须选择与麦克风注入不同的线路。应用层要求明确选择两个设备。
+
+采集后输出 `capture_audio` 事件，包含 `captureId`、递增 `sequence`、
+base64 `packet`、`sampleRate:16000`、`frameDuration:20`。
+`capture_stop` 停止采集；故障输出带相同 `captureId` 的 `capture_fault`。
+stdin EOF 清理采集与注入。采集与编码使用有界队列，不保存 PCM 或 Opus 文件。
+应用使用两个 helper 进程分别处理上下行。
+
+macOS 的 Chromium 会将 `BlackHole 16ch` 显示为 `BlackHole 16ch (Virtual)`；
+原生语音适配仅对 BlackHole 的这一固定后缀做归一化，仍要求唯一匹配。

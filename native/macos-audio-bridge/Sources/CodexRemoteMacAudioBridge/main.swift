@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct AudioBridgeError: LocalizedError {
     let message: String
@@ -28,17 +29,29 @@ final class BoundedLineReader {
             guard buffer.count <= Self.maximumBytes else {
                 throw AudioBridgeError("JSONL command exceeds 16384 UTF-8 bytes.")
             }
-            guard let chunk = try input.read(upToCount: 4_096), !chunk.isEmpty else {
+            // FileHandle.read(upToCount:) can wait for a full pipe buffer. A
+            // command/reply protocol needs each available line immediately.
+            var bytes = [UInt8](repeating: 0, count: 4096)
+            let count = Darwin.read(input.fileDescriptor, &bytes, bytes.count)
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw AudioBridgeError("Unable to read audio bridge stdin.")
+            }
+            if count == 0 {
                 if buffer.isEmpty { return nil }
                 throw AudioBridgeError("stdin ended in a partial JSONL command.")
             }
-            buffer.append(chunk)
+            buffer.append(contentsOf: bytes.prefix(count))
         }
     }
 }
 
 final class AudioBridgeServer {
     private var session: AudioSession?
+    private var capture: CaptureAudioSession?
+    private let outputLock = NSLock()
+    private let audioOutput = DispatchQueue(label: "codexremote.capture.events")
+    private let audioCapacity = DispatchSemaphore(value: 32)
     private let commands = DispatchQueue(label: "codexremote.audio.commands")
     private let capacity = DispatchSemaphore(value: 128)
     private let termination = NSLock()
@@ -71,6 +84,8 @@ final class AudioBridgeServer {
         commands.sync {
             session?.close()
             session = nil
+            capture?.close()
+            capture = nil
         }
     }
 
@@ -89,6 +104,12 @@ final class AudioBridgeServer {
             switch operation {
             case "list":
                 reply(id: id, ok: true, extra: ["devices": try CoreAudioDevices.virtualCables().map(\.wireValue)])
+            case "capture_list":
+                reply(id: id, ok: true, extra: ["devices": try CoreAudioDevices.virtualCables().map(\.wireValue)])
+            case "capture_start": try startCapture(id: id, root: root)
+            case "capture_stop":
+                capture?.close(); capture = nil
+                reply(id: id, ok: true, result: ["stopped": true])
             case "start": try start(id: id, root: root)
             case "append": try append(id: id, root: root)
             case "stop": try stop(id: id)
@@ -124,6 +145,7 @@ final class AudioBridgeServer {
             selected = device
         }
         guard !stopping else { throw AudioBridgeError("Audio input has closed.") }
+        guard capture?.device.id != selected.id else { throw AudioBridgeError("Microphone and answer audio require separate BlackHole devices.") }
         let active = try AudioSession(device: selected)
         session = active
         active.onFault = { [weak self, weak active] error in
@@ -143,6 +165,40 @@ final class AudioBridgeServer {
             "channels": VirtualAudioOutput.channels,
             "maxBufferedMs": VirtualAudioOutput.maxBufferedMilliseconds
         ])
+    }
+
+    private func startCapture(id: String, root: [String: Any]) throws {
+        guard capture == nil else { throw AudioBridgeError("Answer capture is already active.") }
+        guard let deviceId = root["deviceId"] as? String, !deviceId.isEmpty,
+              let selected = try CoreAudioDevices.find(id: deviceId) else {
+            throw AudioBridgeError("Select a dedicated BlackHole answer device.")
+        }
+        guard deviceId != root["inputDeviceId"] as? String, deviceId != session?.device.id else {
+            throw AudioBridgeError("Microphone and answer audio require separate BlackHole devices.")
+        }
+        let active = try CaptureAudioSession(device: selected)
+        active.onAudio = { [weak self, weak active] packet, sequence in
+            guard let self, let active, self.audioCapacity.wait(timeout: .now()) == .success else { return }
+            let captureID = active.id
+            self.audioOutput.async {
+                defer { self.audioCapacity.signal() }
+                self.write(["event": "capture_audio", "captureId": captureID,
+                    "packet": packet.base64EncodedString(), "sampleRate": 16000,
+                    "frameDuration": 20, "sequence": sequence])
+            }
+        }
+        active.onFault = { [weak self, weak active] error in
+            self?.commands.async { [weak self, weak active] in
+                guard let self, let active, self.capture === active else { return }
+                active.close(); self.capture = nil
+                self.write(["event": "capture_fault", "captureId": active.id, "error": error])
+            }
+        }
+        capture = active
+        do { try active.start() }
+        catch { active.close(); capture = nil; throw error }
+        reply(id: id, ok: true, result: ["deviceId": selected.id, "name": selected.name,
+            "captureId": active.id, "sampleRate": 16000, "channels": 1, "frameDuration": 20])
     }
 
     private func append(id: String, root: [String: Any]) throws {
@@ -202,6 +258,8 @@ final class AudioBridgeServer {
         guard JSONSerialization.isValidJSONObject(value),
               let data = try? JSONSerialization.data(withJSONObject: value),
               data.count <= 16 * 1_024 else { return }
+        outputLock.lock()
+        defer { outputLock.unlock() }
         FileHandle.standardOutput.write(data)
         FileHandle.standardOutput.write(Data([0x0A]))
     }

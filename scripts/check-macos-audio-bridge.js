@@ -15,6 +15,9 @@ function runHelper(executable, input) {
 function check(executable) {
   const requests = [
     { id: 'list', op: 'list' },
+    { id: 'capture-list', op: 'capture_list' },
+    { id: 'capture-missing', op: 'capture_start' },
+    { id: 'capture-invalid', op: 'capture_start', deviceId: 'missing-device' },
     { id: 'append', op: 'append', packet: 'AQ==' },
     { id: 'stop', op: 'stop' },
     { id: 'cancel', op: 'cancel' },
@@ -31,7 +34,9 @@ function check(executable) {
     assert.match(device.name, /BlackHole/i);
     assert.equal(device.captureName, device.name);
   }
-  for (let index = 1; index < requests.length; index++) {
+  assert.equal(replies[1].ok, true);
+  assert.deepEqual(replies[1].devices, replies[0].devices);
+  for (let index = 2; index < requests.length; index++) {
     assert.equal(replies[index].ok, false);
     assert.equal(typeof replies[index].error, 'string');
   }

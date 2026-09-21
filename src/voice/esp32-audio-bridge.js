@@ -195,7 +195,9 @@ class Esp32AudioBridge extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (!this.pending.has(id)) return;
-        const error = new Error(`ESP32 audio bridge ${op} timed out.`);
+        const error = new Error(op === 'capture_start'
+          ? '电脑回答音频设备初始化超时（30 秒），请检查所选输出设备是否可用或被独占，然后重试。'
+          : `ESP32 audio bridge ${op} timed out.`);
         this.processFault(error);
       }, timeoutMs);
       this.pending.set(id, { op, bytes, timeout, resolve, reject });
