@@ -46,8 +46,8 @@ function findWindowsCodexProcess() {
 
 function parseMacCodexProcesses(stdout) {
   return String(stdout || '').split(/\r?\n/).map(line => {
-    const match = line.match(/^\s*(\d+)\s+(.+?\/Codex\.app\/Contents\/MacOS\/(?:Codex|ChatGPT))(?:\s|$)/);
-    if (!match || /(?:^|\s)--type=/.test(line)) return null;
+    const match = line.match(/^\s*(\d+)\s+(.+?\/(Codex|ChatGPT)\.app\/Contents\/MacOS\/(Codex|ChatGPT))(?:\s|$)/);
+    if (!match || match[3] !== match[4] || /(?:^|\s)--type=/.test(line)) return null;
     return { pid: Number(match[1]), executable: match[2] };
   }).filter(process => process && Number.isInteger(process.pid));
 }
@@ -102,8 +102,36 @@ async function connectInspector() {
     socket.once('error', error => { clearTimeout(timer); reject(error); });
   });
   let sequence = 0;
+  function command(method, params) {
+    const id = ++sequence;
+    return new Promise((resolve, reject) => {
+      const finish = (error, result) => { clearTimeout(timer); socket.off('message', onMessage); socket.off('close', onClose); error ? reject(error) : resolve(result); };
+      const onClose = () => finish(new Error('Codex 本地连接已断开'));
+      const onMessage = data => {
+        const message = JSON.parse(data);
+        if (message.id !== id) return;
+        if (message.error || message.result?.exceptionDetails) finish(new Error(message.result?.exceptionDetails?.exception?.description || message.error?.message || 'Codex Micro 调试请求失败'));
+        else finish(null, message.result);
+      };
+      const timer = setTimeout(() => finish(new Error('Codex Micro 调试请求超时')), 8000);
+      socket.on('message', onMessage); socket.once('close', onClose);
+      socket.send(JSON.stringify({ id, method, params }));
+    });
+  }
   return {
     close: () => socket.close(),
+    async activateMicroShim(ownerToken) {
+      const objectGroup = `codex-remote-micro-${randomUUID()}`;
+      try {
+        const prototype = await command('Runtime.evaluate', { expression: `globalThis.__codexRemoteMicroShimV1?.servicePrototype`, objectGroup });
+        if (!prototype.result?.objectId) throw new Error('Micro shim service prototype is unavailable.');
+        const instances = await command('Runtime.queryObjects', { prototypeObjectId: prototype.result.objectId, objectGroup });
+        const result = await command('Runtime.callFunctionOn', { objectId: instances.objects.objectId,
+          functionDeclaration: `function(owner) { if (this.length !== 1) throw new Error('A unique Codex Micro service is required.'); const shim = globalThis.__codexRemoteMicroShimV1; if (shim?.ownerToken !== owner) throw new Error('Micro shim owner changed.'); return shim.activateService(this[0]); }`,
+          arguments: [{ value: ownerToken }], returnByValue: true });
+        return result.result?.value;
+      } finally { await command('Runtime.releaseObjectGroup', { objectGroup }).catch(() => {}); }
+    },
     evaluate(expression) {
       const id = ++sequence;
       return new Promise((resolve, reject) => {
@@ -153,23 +181,43 @@ class CodexMicroSlots {
     this.findProcess = options.findProcess || (() => findCodexProcess({ platform: this.platform }));
     this.connectInspector = options.connectInspector || connectInspector;
     this.readPipe = options.readPipe || readPipe;
-    this.activate = options.activate || (pid => process._debugProcess(pid));
     this.pipePath = null; this.token = null; this.connecting = null; this.generation = 0;
     this.nextAttemptAt = 0;
+    this.lastReadError = null;
   }
   async read() {
-    if (Date.now() < this.nextAttemptAt) throw new Error('正在重新连接 Codex Micro');
+    if (Date.now() < this.nextAttemptAt) throw this.lastReadError || new Error('正在重新连接 Codex Micro');
     try {
       if (!this.pipePath) await this._connect();
-      return normalizeMicroSnapshot(await this.readPipe(this.pipePath, this.token));
+      const snapshot = normalizeMicroSnapshot(await this.readPipe(this.pipePath, this.token));
+      this.lastReadError = null;
+      return snapshot;
     }
-    catch (error) { this.stop(); this.nextAttemptAt = Date.now() + 5000; throw error; }
+    catch (error) { this.stop(); this.lastReadError = error; this.nextAttemptAt = Date.now() + 5000; throw error; }
   }
   async request(type, payload = {}) {
     if (this.platform !== 'darwin') throw new Error('Runtime controls require macOS.');
+    if (!this.pipePath && type.startsWith('micro-') && type !== 'micro-connect') {
+      if (type === 'micro-close') return { closed: true };
+      throw new Error('Micro shim connection was lost; reconnect required.');
+    }
     if (!this.pipePath) await this._connect();
     // Never retry an operation after its outcome becomes uncertain.
-    return this.readPipe(this.pipePath, this.token, type, payload);
+    const result = await this.readPipe(this.pipePath, this.token, type, payload);
+    if (type === 'micro-connect') {
+      const pipePath = this.pipePath, token = this.token;
+      let inspector;
+      try {
+        const target = await this.findProcess();
+        inspector = await this.connectInspector();
+        const identity = await inspector.evaluate('({pid:process.pid,executable:process.execPath})');
+        if (identity?.pid !== target.pid || identity.executable !== target.executable) throw new Error('Codex 进程身份不匹配');
+        if (pipePath !== this.pipePath || token !== this.token) throw new Error('Micro shim connection was cancelled.');
+        await inspector.activateMicroShim(token);
+      } catch (error) { await this.readPipe(pipePath, token, 'micro-close').catch(() => {}); throw error; }
+      finally { inspector?.close(); }
+    }
+    return result;
   }
   _connect() {
     if (this.connecting) return this.connecting;
@@ -180,24 +228,22 @@ class CodexMicroSlots {
   }
   async _bootstrap(generation) {
     const target = await this.findProcess();
-    let inspector, activated = false, verified = false;
+    let inspector;
     try {
       try { inspector = await this.connectInspector(); } catch (_) {
         if (this.platform === 'win32') {
           throw new Error(require('../platform/codex-inspector-policy').WINDOWS_INSPECTOR_REQUIRED);
         }
-        this.activate(target.pid); activated = true;
-        for (let attempt = 0; attempt < 10; attempt++) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          try { inspector = await this.connectInspector(); break; } catch (_) {}
-        }
+        // On macOS _debugProcess sends SIGUSR1. Codex can terminate when
+        // its handler is disabled, or trap during inspector startup even
+        // with the fuse enabled (observed in 26.915.31945). Never signal it.
+        throw new Error(require('../platform/codex-inspector-policy').MACOS_INSPECTOR_REQUIRED);
       }
       if (!inspector) throw new Error('无法建立 Codex Micro 本地同步连接');
       const identity = await inspector.evaluate('({pid:process.pid,executable:process.execPath})');
       const normalizeExecutable = value => typeof value === 'string'
         ? (this.platform === 'win32' ? value.toLowerCase() : value) : null;
       if (identity?.pid !== target.pid || normalizeExecutable(identity.executable) !== normalizeExecutable(target.executable)) throw new Error('Codex 进程身份不匹配');
-      verified = true;
       if (generation !== this.generation) throw new Error('Codex Micro 同步已取消');
       const pipePath = runtimeSocketPath(this.platform, target.pid);
       const token = randomBytes(32).toString('hex');
@@ -206,14 +252,14 @@ class CodexMicroSlots {
       if (generation !== this.generation) { void this.readPipe(pipePath, token, 'close').catch(() => {}); throw new Error('Codex Micro 同步已取消'); }
       this.pipePath = pipePath; this.token = token;
     } finally {
-      // The inspector is needed only to establish the narrowly scoped pipe.
-      if (activated && verified && inspector) await inspector.evaluate("setTimeout(() => process.mainModule.require('inspector').close(), 50); true").catch(() => {});
+      // This connection only consumes an existing inspector; it does not own it.
       inspector?.close();
     }
   }
   stop() {
     this.generation += 1;
     this.nextAttemptAt = 0;
+    this.lastReadError = null;
     if (this.pipePath) void this.readPipe(this.pipePath, this.token, 'close').catch(() => {});
     this.pipePath = null; this.token = null; this.connecting = null;
   }

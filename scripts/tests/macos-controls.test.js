@@ -1,10 +1,12 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const MacController = require('../../src/voice/macos-controller');
+const MacShimController = require('../../src/voice/macos-shim-controller');
 const VirtualMicroProvider = require('../../src/voice/providers/virtual-micro-provider');
 const { controlDelivered } = require('../../src/voice/control-delivery');
 const { codexHome, desktopIpcPath, validateDesktopSocket } = require('../../src/platform/codex-paths');
 const { buildMacRendererProfile } = require('../../src/platform/macos-renderer-profile');
+const { parseMacCodexProcesses } = require('../../src/core/codex-micro-slots');
 
 function fixture(options = {}) {
   const snapshot = { selectedThreadKey: 'local:a', route: 'app://-/index.html#/threads/a',
@@ -41,6 +43,20 @@ test('platform paths preserve Windows and honor explicit Mac CODEX_HOME', () => 
   assert.equal(codexHome({ platform: 'darwin', homeDirectory: '/Users/person', env: {} }), '/Users/person/.codex');
   assert.equal(desktopIpcPath({ platform: 'darwin', env: { CODEX_HOME: '/private/codex' } }), '/private/codex/ipc/ipc.sock');
   assert.throws(() => desktopIpcPath({ platform: 'linux' }), /not available/);
+});
+
+test('Mac process discovery accepts current ChatGPT and legacy Codex app names only', () => {
+  const processes = parseMacCodexProcesses([
+    ' 101 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT',
+    ' 102 /Applications/Codex.app/Contents/MacOS/Codex',
+    ' 103 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --type=renderer',
+    ' 104 /Applications/ChatGPT.app/Contents/MacOS/Codex',
+    ' 105 /tmp/ChatGPT.app/Contents/MacOS/Other'
+  ].join('\n'));
+  assert.deepEqual(processes, [
+    { pid: 101, executable: '/Applications/ChatGPT.app/Contents/MacOS/ChatGPT' },
+    { pid: 102, executable: '/Applications/Codex.app/Contents/MacOS/Codex' }
+  ]);
 });
 
 test('Unix IPC rejects foreign ownership, writable parent, and symlinks', () => {
@@ -123,13 +139,33 @@ test('Mac target changes reject input before dispatch', async () => {
   } finally { await controller.close(); }
 });
 
+test('Mac cancellation resolves a client draft binding but guards the raw renderer identity', async () => {
+  const { controller, calls, snapshot } = fixture();
+  snapshot.selectedThreadKey = 'local:client-new-thread:draft-a';
+  snapshot.threadBindings = { 'client-new-thread:draft-a': 'a' };
+  try {
+    await controller.escape({ discard: true });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].type, 'escape');
+    assert.equal(calls[0].discard, true);
+    assert.equal(calls[0].expectedThreadKey, 'local:client-new-thread:draft-a');
+    assert.deepEqual(await controller.resolveMicroDraft({ candidates: ['a'] }), { threadId: 'a' });
+    assert.equal((await controller.selectTask('a')).outcome, 'confirmed');
+    snapshot.threadBindings['client-new-thread:draft-a'] = 'b';
+    await assert.rejects(controller.escape({ discard: true }), /不一致/);
+    delete snapshot.threadBindings['client-new-thread:draft-a'];
+    await assert.rejects(controller.escape({ discard: true }), /不一致/);
+    assert.equal(calls.length, 1, 'different or unbound drafts must never be cancelled');
+  } finally { await controller.close(); }
+});
+
 test('provider chooses Mac controller and preserves its transport status', async () => {
   const { runtime } = fixture();
   const provider = new VirtualMicroProvider({ audioSource: 'computer' }, { controllerOptions: { platform: 'darwin', runtime } });
   try {
-    assert.ok(provider.controller instanceof MacController);
-    await provider.controller.connect();
-    assert.equal(provider.getStatus().transport, 'desktop_runtime');
+    assert.ok(provider.controller instanceof MacShimController);
+    assert.equal(provider.getStatus().transport, 'codex_hid_shim');
+    assert.equal(provider.getStatus().microConnected, false);
     assert.equal(provider.getStatus().driverAvailable, false);
   } finally { await provider.dispose(); }
 });

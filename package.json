@@ -2,6 +2,7 @@
   "name": "codex-remote-pc",
   "version": "0.2.1",
   "description": "Codex Remote Control - PC Bridge",
+  "author": "AlayaElla",
   "main": "src/main.js",
   "scripts": {
     "build:css": "tailwindcss -i ./src/ui/tailwind.css -o ./src/ui/app.css --minify",
@@ -12,9 +13,11 @@
     "start": "electron .",
     "predev": "npm run build:css",
     "dev": "electron . --dev",
-    "package": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-pc.ps1",
+    "package": "node scripts/package.js",
+    "package:mac": "node scripts/package-macos.js",
+    "package:win": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-pc.ps1",
     "portable": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-pc.ps1",
-    "package:app": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-pc.ps1",
+    "package:app": "node scripts/package.js",
     "package:driver": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-virtual-micro-driver.ps1"
   },
   "dependencies": {
@@ -31,25 +34,15 @@
   "build": {
     "appId": "com.codex.remote",
     "productName": "Codex Remote",
-    "artifactName": "CodexRemote-Portable-${version}.${ext}",
+    "afterPack": "scripts/after-pack-macos.js",
     "asar": true,
     "asarUnpack": [
       "src/platform/codex-shortcuts.ps1",
       "src/platform/codex-micro-draft-link.ps1",
       "src/platform/codex-task-list.ps1"
     ],
-    "extraResources": [
-      {
-        "from": "native/virtual-micro-broker/bin/Release/net9.0-windows/win-x64/publish",
-        "to": "virtual-micro"
-      },
-      {
-        "from": "native/esp32-audio-bridge/bin/Release/net9.0-windows/win-x64/publish",
-        "to": "esp32-audio"
-      }
-    ],
     "directories": {
-      "output": "build/pc"
+      "output": "build"
     },
     "files": [
       "src/**/*",
@@ -60,8 +53,38 @@
     "win": {
       "target": "portable",
       "icon": "assets/app-icon.ico",
+      "artifactName": "CodexRemote-Portable-${version}.${ext}",
       "executableName": "CodexRemote",
-      "requestedExecutionLevel": "asInvoker"
+      "requestedExecutionLevel": "asInvoker",
+      "extraResources": [
+        {
+          "from": "native/virtual-micro-broker/bin/Release/net9.0-windows/win-x64/publish",
+          "to": "virtual-micro"
+        },
+        {
+          "from": "native/esp32-audio-bridge/bin/Release/net9.0-windows/win-x64/publish",
+          "to": "esp32-audio"
+        }
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "assets/app-icon.png",
+      "category": "public.app-category.utilities",
+      "minimumSystemVersion": "13.0",
+      "artifactName": "CodexRemote-${version}-mac-${arch}.${ext}",
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Codex Remote uses the local network to connect to your ESP32 controller."
+      },
+      "extraResources": [
+        {
+          "from": "build/macos-native/esp32-audio",
+          "to": "esp32-audio"
+        }
+      ]
     }
   }
 }

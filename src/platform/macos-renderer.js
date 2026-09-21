@@ -67,6 +67,25 @@ async function macRenderer(profile, request) {
   };
   guard();
   if (request.op === 'read') return snapshot();
+  if (request.op === 'cancel-dictation') {
+    // Use the composer's native abort callback. Escape depends on keyboard
+    // focus and acknowledges key delivery before React has cancelled capture.
+    const pending = [container?.stateNode?.current || container], visited = new Set(), aborts = new Set();
+    while (pending.length && visited.size < 30000) {
+      const fiber = pending.pop();
+      if (!fiber || visited.has(fiber)) continue;
+      visited.add(fiber);
+      const controls = fiber.memoizedProps?.voiceControls;
+      if (controls && (controls.isDictationStarting || controls.isDictating || controls.isTranscribing)
+          && typeof controls.abortDictation === 'function') aborts.add(controls.abortDictation);
+      pending.push(fiber.sibling, fiber.child);
+    }
+    if (aborts.size !== 1) throw new Error('A unique active Codex dictation is required for cancellation.');
+    guard();
+    await [...aborts][0]();
+    await waitFor(() => voice() === 'idle');
+    return { success: true, delivery: 'discarded_in_native_app', outcome: 'confirmed' };
+  }
   if (request.op === 'ptt') {
     if (typeof request.down !== 'boolean') throw new Error('Invalid PTT state.');
     if (request.down && voice() === 'recording') throw new Error('Codex is already recording.');

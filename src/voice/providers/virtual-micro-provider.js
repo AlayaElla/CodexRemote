@@ -16,7 +16,7 @@ function normalizeAudioConfig(config = {}) {
 }
 
 function loadController(options = {}) {
-  if ((options.controllerOptions?.platform || options.platform || process.platform) === 'darwin') return require('../macos-controller');
+  if ((options.controllerOptions?.platform || options.platform || process.platform) === 'darwin') return require('../macos-shim-controller');
   try {
     return require('../virtual-micro/controller');
   } catch (error) {

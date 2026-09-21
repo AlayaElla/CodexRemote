@@ -64,9 +64,18 @@ class MacController extends EventEmitter {
   }
   async context(target) {
     const snapshot = await this.runtime.read();
-    if (target?.taskId && snapshot.selectedThreadKey !== `local:${target.taskId}`) throw new Error('Codex 当前任务与设备目标不一致。');
+    if (target?.taskId && this.selectedThreadId(snapshot) !== target.taskId) throw new Error('Codex 当前任务与设备目标不一致。');
     if (target?.draftToken && (snapshot.selectedThreadKey !== null || !snapshot.composerReady)) throw new Error('Codex 新任务草稿已变化。');
     return { expectedThreadKey: snapshot.selectedThreadKey, expectedRoute: snapshot.route };
+  }
+  selectedThreadId(snapshot) {
+    const key = snapshot.selectedThreadKey;
+    if (typeof key !== 'string' || !key.startsWith('local:')) return null;
+    const id = key.slice(6);
+    // A newly created task can retain its client draft key after submission.
+    // Micro slots use the persisted thread ID; use Codex's binding to compare
+    // identities, while keeping the raw key for runtime dispatch guards.
+    return id.startsWith('client-new-thread:') ? snapshot.threadBindings?.[id] || null : id;
   }
   async waitFor(predicate) {
     const generation = this.generation;
@@ -85,11 +94,11 @@ class MacController extends EventEmitter {
       if (hostId !== 'local' || !/^[\w-]{1,128}$/.test(threadId)) throw new Error('Invalid local task identity.');
       const before = await this.runtime.read();
       if (!before.slots.some(slot => slot.threadId === threadId && slot.hostId === hostId)) throw new Error('Micro 槽位已变化。');
-      if (before.selectedThreadKey !== `local:${threadId}`) {
+      if (this.selectedThreadId(before) !== threadId) {
         guard();
         await new Promise((resolve, reject) => this.execFile('/usr/bin/open', [`codex://threads/${encodeURIComponent(threadId)}`],
           { timeout: 5000, maxBuffer: 4096 }, error => error ? reject(error) : resolve()));
-        await this.waitFor(snapshot => { guard(); return snapshot.selectedThreadKey === `local:${threadId}`; });
+        await this.waitFor(snapshot => { guard(); return this.selectedThreadId(snapshot) === threadId; });
       }
       guard();
       return { delivery: 'desktop_runtime', outcome: 'confirmed' };
@@ -138,10 +147,10 @@ class MacController extends EventEmitter {
       return result;
     });
   }
-  escape({ stop = false } = {}) {
+  escape({ stop = false, discard = false } = {}) {
     return this.enqueue(async () => {
       const context = this.pttTarget || await this.context(this.options.getTarget?.());
-      return this.runtime.request('escape', { ...context, stop });
+      return this.runtime.request('escape', { ...context, stop, discard });
     });
   }
   pasteText(text, target) {
@@ -150,7 +159,7 @@ class MacController extends EventEmitter {
   }
   async resolveMicroDraft({ candidates }) {
     const snapshot = await this.runtime.read();
-    const id = snapshot.selectedThreadKey?.startsWith('local:') ? snapshot.selectedThreadKey.slice(6) : null;
+    const id = this.selectedThreadId(snapshot);
     return candidates?.includes(id) ? { threadId: id } : null;
   }
   releaseAll() { return this.setPtt(false); }

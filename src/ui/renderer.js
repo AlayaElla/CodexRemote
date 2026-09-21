@@ -198,7 +198,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (voiceMicroAudioDevice?.options[0]) voiceMicroAudioDevice.options[0].textContent = automaticAudioLabel;
     if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = '安装 BlackHole 并刷新；Codex 麦克风选择同一 BlackHole 设备。';
     if (btnRefreshVirtualMicroDriver) btnRefreshVirtualMicroDriver.classList.add('hidden');
-    if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = 'macOS 使用本机 Codex 控制接口，连接状态见下方。';
+    document.getElementById('voice-virtual-micro-driver-hint')?.classList.add('hidden');
+    if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = 'macOS 使用进程内 Micro Shim，无需安装 HID 驱动；原生握手状态见上方。';
     virtualMicroDriverChecked = true;
   }
 
@@ -308,7 +309,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (incoming && typeof incoming === 'object') virtualMicroReadiness = { ...virtualMicroReadiness, ...incoming };
     const virtualMicro = virtualMicroReadiness;
     if (!virtualMicro || !voiceVirtualMicroStatus) return;
-    const checks = macHost ? [`Codex 本机接口：${virtualMicro.connected ? '已连接' : '未连接'}`] : [
+    const checks = macHost ? [`Codex Micro Shim：${virtualMicro.connected ? '已连接' : '未连接'}`,
+      `原生 Micro RPC：${virtualMicro.microConnected ? '已握手' : '未握手'}`] : [
       `驱动：${virtualMicro.driverAvailable ? '已检测' : '未检测'}`,
       `HID：${virtualMicro.hidEnumerated ? '已枚举' : '未枚举'}`,
       `Micro RPC：${virtualMicro.microConnected ? '已握手' : '未握手'}`
@@ -345,7 +347,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }[diagnostic.failurePhase || diagnostic.phase] || '检查中';
         const deviceStatus = diagnostic.deviceStatusSeen ? '设备状态已收到' : '设备状态未收到';
         const initialization = `初始化：版本${diagnostic.versionSeen ? '已收到' : '未收到'}、灯光${diagnostic.lightingSeen ? '已收到' : '未收到'}`;
-        voiceVirtualMicroDetail.textContent = `上次检查：驱动${diagnostic.driverAvailable ? '可用' : '不可用'}/HID${diagnostic.hidEnumerated ? '已枚举' : '未枚举'}；${deviceStatus}；${initialization}；收到${Number(diagnostic.hostReports) || 0}报告，RPC 总数/已识别 ${Number(diagnostic.rpcRequests) || 0}/${Number(diagnostic.knownRequests) || 0}，已接受${Number(diagnostic.acceptedResponses) || 0}响应；${phaseText}`;
+        const transportText = macHost ? '进程内 Micro Shim' : `驱动${diagnostic.driverAvailable ? '可用' : '不可用'}/HID${diagnostic.hidEnumerated ? '已枚举' : '未枚举'}`;
+        voiceVirtualMicroDetail.textContent = `上次检查：${transportText}；${deviceStatus}；${initialization}；收到${Number(diagnostic.hostReports) || 0}报告，RPC 总数/已识别 ${Number(diagnostic.rpcRequests) || 0}/${Number(diagnostic.knownRequests) || 0}，已接受${Number(diagnostic.acceptedResponses) || 0}响应；${phaseText}`;
       } else {
         voiceVirtualMicroDetail.textContent = checks.join(' · ');
       }

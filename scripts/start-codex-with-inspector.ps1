@@ -1,10 +1,21 @@
 param(
     [string]$CodexExecutable,
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$Help
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ($Help) {
+    Write-Host @'
+Codex Windows inspector launcher
+Usage: start-codex-with-inspector.ps1 [-CodexExecutable <path>] [-CheckOnly] [-Help]
+Starts Codex with --inspect=127.0.0.1:9229 after checking processes and port availability.
+-CheckOnly displays state without starting Codex.
+'@
+    return
+}
 
 if (-not $CodexExecutable) {
     $packages = @(Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending)
@@ -43,7 +54,7 @@ for ($attempt = 0; $attempt -lt 20; $attempt++) {
         if (@($targets | Where-Object {
             $_.type -eq 'node' -and $_.webSocketDebuggerUrl -match '^ws://127\.0\.0\.1:9229/[\w-]+$'
         }).Count -gt 0) {
-            Write-Host 'Local inspector is ready. Start the updated CodexRemote bridge now.'
+            Write-Host 'Local inspector is ready. Start Codex Remote to connect.'
             return
         }
     } catch { }

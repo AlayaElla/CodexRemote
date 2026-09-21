@@ -1,5 +1,18 @@
+param([switch]$Help)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($Help) {
+    Write-Host @'
+Codex Remote Windows packaging
+Usage: package-pc.ps1 [-Help]
+Requires npm dependencies, .NET 9 SDK, and Windows x64.
+Builds CSS, Micro broker, audio bridge, and a portable application.
+Output: build/pc/CodexRemote-Portable-<version>.exe
+'@
+    return
+}
 
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepositoryDirectory = (Resolve-Path (Join-Path $ScriptDirectory "..")).Path

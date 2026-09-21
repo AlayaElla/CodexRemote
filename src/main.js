@@ -351,7 +351,7 @@ class CodexRemoteApp {
         guard();
         if (context.taskId) await this.codexControls.activateMicroTask(context.taskId, context.hostId, guard);
         guard();
-        return shortcuts.escape();
+        return shortcuts.escape({ discard: true });
       },
       onResult: (text) => this.sendToWindow('voice-result', text),
       onStatus: (message) => {

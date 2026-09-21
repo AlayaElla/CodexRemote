@@ -40,11 +40,12 @@ enum CoreAudioDevices {
         ), "Unable to enumerate CoreAudio devices")
 
         let count = Int(byteCount) / MemoryLayout<AudioDeviceID>.stride
+        guard count > 0 else { return [] }
         var identifiers = Array(repeating: AudioDeviceID(0), count: count)
         try identifiers.withUnsafeMutableBytes { bytes in
             var size = byteCount
             try check(AudioObjectGetPropertyData(
-                AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, bytes.baseAddress
+                AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, bytes.baseAddress!
             ), "Unable to read CoreAudio devices")
         }
 

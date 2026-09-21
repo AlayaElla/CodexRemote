@@ -54,6 +54,7 @@ class Controller extends EventEmitter {
   }
 
   _publish() { this.emit('status', this.getStatus()); }
+  _transportReady(info) { return info.connected === true && this.state.driverAvailable && this.state.hidEnumerated; }
 
   _beginDiagnostics() {
     this.state.driverAvailable = false;
@@ -310,7 +311,7 @@ class Controller extends EventEmitter {
       });
       this.state.driverAvailable = info.driverAvailable === true;
       this.state.hidEnumerated = info.hidEnumerated === true;
-      this.state.connected = info.connected === true && this.state.driverAvailable && this.state.hidEnumerated;
+      this.state.connected = this._transportReady(info);
       if (this.state.connected) this._refreshHandshake();
       else this._updateDiagnostics('driver_or_hid_unavailable');
       if (!this.state.connected) throw new Error(info.lastError || info.error || 'Virtual Micro driver is not ready.');

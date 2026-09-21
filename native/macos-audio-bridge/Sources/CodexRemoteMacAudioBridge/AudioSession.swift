@@ -37,7 +37,7 @@ final class AudioSession {
                     decoder,
                     packetBytes.bindMemory(to: UInt8.self).baseAddress,
                     Int32(packet.count),
-                    pcmBytes.baseAddress,
+                    pcmBytes.baseAddress!,
                     Int32(Self.maxFrameSamples),
                     0
                 )

@@ -189,6 +189,7 @@ body::-webkit-scrollbar {
 .window-drag-region { -webkit-app-region: drag; }
 .window-no-drag { -webkit-app-region: no-drag; }
 body.drawer-open { overflow: hidden; }
+[hidden] { display: none !important; }
 
 @keyframes surface-in {
   from { opacity: 0; transform: translateY(10px); }

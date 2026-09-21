@@ -48,8 +48,8 @@ class CodexShortcuts {
     return result;
   }
 
-  async escape({ stop = false } = {}) {
-    if (this.platform === 'darwin') return this.macController().escape({ stop });
+  async escape({ stop = false, discard = false } = {}) {
+    if (this.platform === 'darwin') return this.macController().escape({ stop, discard });
     await this._run(stop ? 'EscapeStop' : 'EscapeCancel');
     return { success: true, delivery: 'submitted_to_keyboard', outcome: 'requested' };
   }
@@ -83,7 +83,7 @@ class CodexShortcuts {
 
   macController() {
     const controller = this.getController();
-    if (controller?.getStatus?.().transport !== 'desktop_runtime') throw new Error('macOS Codex 控制器尚未连接。');
+    if (!['desktop_runtime', 'codex_hid_shim'].includes(controller?.getStatus?.().transport)) throw new Error('macOS Codex 控制器尚未连接。');
     return controller;
   }
 }
