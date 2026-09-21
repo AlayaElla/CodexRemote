@@ -1036,7 +1036,7 @@ class CodexRemoteApp {
     const wsServer = this.wsServer;
     wsServer.on('device-send', (delivery) => {
       if (this.wsServer !== wsServer) return;
-      if (delivery.message?.type === 'bridge_status' || delivery.message?.type === 'realtime_audio') return;
+      if (['bridge_status', 'realtime_audio', 'realtime_transcript'].includes(delivery.message?.type)) return;
       this.sendToWindow('device-outbound', delivery.message?.type === 'codex_media_chunk'
         ? { ...delivery, message: { ...delivery.message, data: '[图片分块]' } } : delivery);
     });

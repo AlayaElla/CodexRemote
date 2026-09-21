@@ -35,15 +35,14 @@
     <Compile Include="../virtual-micro-broker/TargetMicroSelection.cs" Link="TargetMicroSelection.cs" />
     <Compile Include="../virtual-micro-broker/NativeIo.cs" Link="NativeIo.cs" />
     <EmbeddedResource Include="../virtual-micro-driver/CodexRemoteVirtualMicro.inf" LogicalName="DriverSetup.ExpectedInf" />
-    <EmbeddedResource Include="../virtual-audio-driver/CodexRemoteVirtualAudio.inf" LogicalName="AudioDriverSetup.ExpectedInf" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
     <Compile Remove="**/*SelfTests.cs" />
     <Compile Remove="DriverBundleOperationsTests.cs" />
+    <Compile Remove="AudioDriverSetup.cs;AudioDriverPayloadHashes.g.cs;WindowsAudioDriverPlatform.cs;DriverBundleOperations.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(EnableLocalTests)' == 'true'">
-    <Compile Include="DriverBundleOperationsTests.cs" />
     <Compile Include="DriverRemovalSelfTests.cs" />
   </ItemGroup>
 </Project>

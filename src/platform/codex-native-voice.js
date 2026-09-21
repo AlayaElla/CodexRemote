@@ -17,6 +17,9 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
     const inputDeviceId = inputId(runtime), outputDeviceId = output?.node?.sinkId || null;
     const routed = Boolean(ours && route.ready && inputDeviceId === route.inputId && outputDeviceId === route.outputId);
     const microphoneMuted = attempt ? attempt.scope.get(module.ur) : null;
+    const activity = attempt ? attempt.scope.get(module.mr) : 'idle';
+    if (ours && activity === 'speaking') route.awaitingReply = false;
+    const thinking = activity === 'thinking' || (ours && (route.awaitingReply || route.runningTurns.size > 0));
     let error = route?.error || null;
     if (!error && route) {
       for (const [scope, previous] of route.launches) {
@@ -25,10 +28,12 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
       }
     }
     return { active, owned: ours, nativeConnected: phase === 'active', connected: phase === 'active' && routed,
-      state: !active ? 'ended' : phase === 'stopping' || (ours && route.ready && !routed) ? 'disconnected' : phase !== 'active' ? 'connecting' : microphoneMuted ? 'muted' : attempt.scope.get(module.mr) === 'speaking' ? 'speaking' : 'listening',
+      state: !active ? 'ended' : phase === 'stopping' || (ours && route.ready && !routed) ? 'disconnected' : phase !== 'active' ? 'connecting' : microphoneMuted ? 'muted' : activity === 'speaking' ? 'speaking' : thinking ? 'thinking' : 'listening',
       connectionState: phase, microphoneMuted, conversationId: attempt?.locator.conversationId || null,
       hostId: attempt?.locator.hostId || null, voiceSessionId: ours ? route.sessionId : active ? `external:${runtime?.options?.realtimeSessionId || service.startRequestId}` : null,
-      inputDeviceId, outputDeviceId, error };
+      inputDeviceId, outputDeviceId, error,
+      ...(routed ? { transcript: { sequence: route.captionSequence,
+        entries: route.captions.map(entry => ({ ...entry })) } } : {}) };
   };
   const restoreProperty = (object, name, descriptor, installed) => {
     if (object[name] !== installed) return;
@@ -39,6 +44,58 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
     route.hooksRestored = true;
     clearTimeout(route.timer);
     for (const restore of route.restore.reverse()) restore();
+  };
+  const releaseActivity = route => {
+    route.restoreActivity?.();
+    route.restoreActivity = null;
+    route.awaitingReply = false;
+    route.runningTurns.clear();
+    route.captions.length = 0;
+    route.captionSequence = 0;
+  };
+  const observeTranscript = (route, event) => {
+    const done = event.method === 'thread/realtime/transcript/done';
+    if (!done && event.method !== 'thread/realtime/transcript/delta') return;
+    const { role } = event.params;
+    const value = done ? event.params.text : event.params.delta;
+    if (!['user', 'assistant'].includes(role) || typeof value !== 'string') return;
+    const clean = value.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '');
+    if (!clean && !done) return;
+    const previous = route.captions.findLast(entry => entry.role === role);
+    if (done && previous?.final && previous.role === role && previous.text === Array.from(clean).slice(-512).join('')) return;
+    let entry = previous;
+    if (!entry || entry.role !== role || entry.final) {
+      if (!clean.trim()) return;
+      entry = { role, text: '', final: false };
+      route.captions.push(entry);
+      if (route.captions.length > 2) route.captions.shift();
+    }
+    // Complete snapshots recover dropped polls and correct provisional text.
+    entry.text = Array.from(done ? clean : entry.text + clean).slice(-512).join('');
+    entry.final = done;
+    route.captionSequence++;
+  };
+  const observeActivity = route => {
+    const attempt = route.attempt, options = attempt?.runtime?.options;
+    if (!options || typeof options.onNotification !== 'function' || route.restoreActivity) return;
+    const descriptor = Object.getOwnPropertyDescriptor(options, 'onNotification');
+    const original = options.onNotification;
+    const observer = function (event) {
+      // Observe only this native attempt; captions are bounded, in-memory display data.
+      if (service.currentAttempt === attempt && event?.params?.threadId === attempt.locator.conversationId) {
+        const params = event.params;
+        observeTranscript(route, event);
+        if (event.method === 'turn/started' && params.turn?.id) route.runningTurns.add(params.turn.id);
+        if (event.method === 'turn/completed' && params.turn?.id) route.runningTurns.delete(params.turn.id);
+        if (event.method === 'thread/realtime/transcript/done') {
+          if (params.role === 'user') route.awaitingReply = true;
+          if (params.role === 'assistant') route.awaitingReply = false;
+        }
+      }
+      return original.apply(this, arguments);
+    };
+    Object.defineProperty(options, 'onNotification', { configurable: true, writable: true, value: observer });
+    route.restoreActivity = () => restoreProperty(options, 'onNotification', descriptor, observer);
   };
   const releaseAudio = (route, successful) => {
     for (const item of route.audio) {
@@ -66,7 +123,9 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
       return matches[0].deviceId;
     };
     const route = { token: request.routeToken, sessionId: request.routeToken, inputId: device('audioinput', request.inputCaptureName), outputId: device('audiooutput', request.outputDeviceName),
-      attempt: null, ready: false, audio: [], restore: [], launches: [], error: null };
+      attempt: null, ready: false, audio: [], restore: [], launches: [], error: null,
+      awaitingReply: false, runningTurns: new Set(), restoreActivity: null,
+      captions: [], captionSequence: 0 };
     // Capture existing launch states for useful errors before a native attempt is
     // created. Native readiness itself comes from currentAttempt.scope, not React.
     const root = document.getElementById('root');
@@ -116,7 +175,10 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
         let result;
         try { result = start.call(this, scope, options); }
         finally { if (match) this.microphonePreference = previousPreference; }
-        if (match && matching(this.currentAttempt)) route.attempt = this.currentAttempt;
+        if (match && matching(this.currentAttempt)) {
+          route.attempt = this.currentAttempt;
+          observeActivity(route);
+        }
         Promise.resolve(result).catch(error => { if (match) route.error = String(error.message || error); });
         return result;
       };
@@ -125,11 +187,12 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
       route.timer = setTimeout(() => {
         // A lost bridge must not leave global microphone/audio hooks installed.
         restoreHooks(route);
+        releaseActivity(route);
         void stopOwned(route).catch(() => {}).finally(() => { releaseAudio(route, false); if (globalThis[key] === route) delete globalThis[key]; });
       }, 22000);
       return snapshot();
     } catch (error) {
-      restoreHooks(route); releaseAudio(route, false); delete globalThis[key]; throw error;
+      restoreHooks(route); releaseActivity(route); releaseAudio(route, false); delete globalThis[key]; throw error;
     }
   }
   const route = owned();
@@ -141,6 +204,7 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
   }
   if (request.op === 'cleanup') {
     restoreHooks(route);
+    releaseActivity(route);
     try { if (request.stop === true) await stopOwned(route); }
     finally { releaseAudio(route, false); if (globalThis[key] === route) delete globalThis[key]; }
     return snapshot();
@@ -165,7 +229,7 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
   }
   if (request.op === 'stop') {
     if (request.voiceSessionId !== route.sessionId) throw new Error('Refusing to end a different Codex voice session.');
-    await stopOwned(route); return snapshot();
+    await stopOwned(route); releaseActivity(route); return snapshot();
   }
   throw new Error('Unsupported native voice operation.');
 }

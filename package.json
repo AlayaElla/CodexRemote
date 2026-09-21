@@ -1,6 +1,6 @@
 {
   "name": "codex-remote-pc",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Codex Remote Control - PC Bridge",
   "main": "src/main.js",
   "scripts": {

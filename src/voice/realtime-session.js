@@ -2,6 +2,9 @@ const { EventEmitter } = require('events');
 
 const validId = value => typeof value === 'string' && /^[\w.:-]{1,128}$/.test(value);
 const PHASES = new Set(['listening', 'thinking', 'speaking', 'muted']);
+// Match the helper's 32-frame burst buffer: at 20 ms/frame this retains at
+// most 640 ms of pending audio, plus one frame already handed to the socket.
+const MAX_OUTPUT_FRAMES = 32;
 
 // Owns one native call and both audio directions. No dictation or task submission.
 class RealtimeSession extends EventEmitter {
@@ -84,12 +87,14 @@ class RealtimeSession extends EventEmitter {
       if (config.virtualMicro.audioSource !== 'esp32') throw new Error('请将音频来源设为 ESP32 麦克风。');
       call = { id: message.requestId, context, state: 'connecting', generation: 1, sequence: 0,
         inputSequence: -1, inputDeviceId: config.virtualMicro.audioDeviceId || '', ready: false,
-        muted: false, acceptsAudio: false, cancelled: false, pendingInput: 0, pendingOutput: 0,
+        muted: false, acceptsAudio: false, cancelled: false, pendingInput: 0,
+        outputQueue: [], sendingOutput: false, droppedOutput: 0,
         native: this.nativeFactory(), audio: this.audioFactory() };
       this.active = call;
       await this.publish(call, 'connecting');
       call.onFault = error => { if (this.active === call) void this.stop('error', error.message).catch(() => {}); };
       call.onAudio = packet => { void this.output(call, packet).catch(call.onFault); };
+      call.onTranscript = event => { void this.transcript(call, event).catch(call.onFault); };
       call.onState = event => {
         if (this.active !== call || !call.ready || call.cancelled) return;
         const state = typeof event === 'string' ? event : event.state;
@@ -101,6 +106,7 @@ class RealtimeSession extends EventEmitter {
       };
       call.audio.on('audio', call.onAudio); call.audio.on('fault', call.onFault);
       call.native.on('state', call.onState); call.native.on('fault', call.onFault);
+      call.native.on('transcript', call.onTranscript);
       // Initialize answer capture before opening the microphone render stream.
       // Opening WASAPI loopback immediately after render startup can block.
       const capture = await call.audio.startCapture(config.realtime.outputDeviceId, call.inputDeviceId);
@@ -117,6 +123,7 @@ class RealtimeSession extends EventEmitter {
       if (this.active !== call || call.cancelled) throw new Error('语音连接已取消。');
       await this.assertTarget(context);
       call.ready = true;
+      call.voiceSessionId = result.state?.voiceSessionId;
       await this.send({ type: 'realtime_audio_clear', requestId: call.id, generation: 1,
         host_id: context.hostId, thread_id: context.taskId, stream_id: context.streamId });
       call.guard = setInterval(() => {
@@ -124,7 +131,9 @@ class RealtimeSession extends EventEmitter {
       }, 500);
       call.guard.unref?.();
       const initialState = typeof result.state === 'string' ? result.state : result.state?.state;
-      return this.publish(call, PHASES.has(initialState) ? initialState : 'listening');
+      await this.publish(call, PHASES.has(initialState) ? initialState : 'listening');
+      const initialTranscript = call.native.getTranscript?.();
+      if (initialTranscript) await this.transcript(call, initialTranscript);
     } catch (error) {
       if (call && this.active === call) return this.stop(call.cancelled ? 'ended' : 'error', call.cancelled ? undefined : error.message);
       if (!call) return this.send({ type: 'realtime_status', requestId: message.requestId, state: 'error', acceptsAudio: false,
@@ -145,23 +154,57 @@ class RealtimeSession extends EventEmitter {
     catch (error) { if (this.active === call) await this.stop('error', error.message); return false; }
     finally { call.pendingInput--; }
   }
+  async transcript(call, event) {
+    if (this.active !== call || !call.ready || call.cancelled || !call.voiceSessionId ||
+        event?.voiceSessionId !== call.voiceSessionId || event.conversationId !== call.context.taskId ||
+        event.hostId !== call.context.hostId) return;
+    if (!Number.isSafeInteger(event.sequence) || event.sequence < 1 || event.sequence > 0xffffffff ||
+        event.sequence <= (call.transcriptSequence || 0) || !Array.isArray(event.entries) ||
+        event.entries.length < 1 || event.entries.length > 2 || event.entries.some(entry =>
+          !entry || !['user', 'assistant'].includes(entry.role) || typeof entry.text !== 'string' ||
+          Buffer.byteLength(entry.text, 'utf8') > 2048 || /[\u0000-\u0008\u000b-\u001f\u007f]/.test(entry.text) ||
+          typeof entry.final !== 'boolean')) return;
+    call.transcriptSequence = event.sequence;
+    call.pendingTranscript = { type: 'realtime_transcript', requestId: call.id,
+      host_id: call.context.hostId, thread_id: call.context.taskId, stream_id: call.context.streamId,
+      sequence: event.sequence, entries: event.entries.map(({ role, text, final }) => ({ role, text, final })) };
+    if (call.sendingTranscript) return;
+    call.sendingTranscript = true;
+    try {
+      while (this.active === call && call.ready && !call.cancelled && call.pendingTranscript) {
+        const message = call.pendingTranscript;
+        call.pendingTranscript = null;
+        if (await this.send(message) === false) throw new Error('设备已断开，语音字幕发送失败。');
+      }
+    } finally { call.sendingTranscript = false; }
+  }
   async output(call, packet) {
     if (this.active !== call || !call.ready || call.cancelled) return;
-    if (call.pendingOutput >= 8) throw new Error('下行音频队列拥塞，请重新连接。');
     if (packet.sampleRate !== 16000 || packet.frameDuration !== 20 || typeof packet.packet !== 'string' ||
         !packet.packet.length || packet.packet.length > 5464 ||
         Buffer.from(packet.packet, 'base64').length > 4096 ||
         Buffer.from(packet.packet, 'base64').toString('base64') !== packet.packet) throw new Error('回答音频帧无效。');
-    call.pendingOutput++;
+    // A single stdout read can synchronously emit many frames before any send
+    // promise settles. Count queued audio, not concurrent promise callbacks.
+    if (call.outputQueue.length >= MAX_OUTPUT_FRAMES) {
+      call.outputQueue.shift();
+      call.droppedOutput++;
+    }
+    call.outputQueue.push({ type: 'realtime_audio', requestId: call.id, generation: call.generation,
+      host_id: call.context.hostId, thread_id: call.context.taskId, stream_id: call.context.streamId,
+      sequence: ++call.sequence, codec: 'opus', data: packet.packet,
+      sampleRate: packet.sampleRate, frameDuration: packet.frameDuration });
+    if (call.sendingOutput) return;
+    call.sendingOutput = true;
     try {
-      const ok = await this.send({ type: 'realtime_audio', requestId: call.id, generation: call.generation,
-        host_id: call.context.hostId, thread_id: call.context.taskId, stream_id: call.context.streamId,
-        sequence: ++call.sequence, codec: 'opus', data: packet.packet,
-        sampleRate: packet.sampleRate, frameDuration: packet.frameDuration });
-      if (ok === false) throw new Error('回答音频发送失败。');
-    } finally { call.pendingOutput--; }
+      while (this.active === call && call.ready && !call.cancelled && call.outputQueue.length) {
+        const message = call.outputQueue.shift();
+        if (await this.send(message) === false) throw new Error('回答音频发送失败。');
+      }
+    } finally { call.sendingOutput = false; }
   }
   async clearAudio(call) {
+    call.outputQueue.length = 0;
     await this.send({ type: 'realtime_audio_clear', requestId: call.id, generation: ++call.generation,
       host_id: call.context.hostId, thread_id: call.context.taskId, stream_id: call.context.streamId });
   }
@@ -170,11 +213,13 @@ class RealtimeSession extends EventEmitter {
     if (!call) return;
     if (call.stopping) return call.stopping;
     call.cancelled = true; call.ready = false; call.acceptsAudio = false;
+    call.pendingTranscript = null;
     clearInterval(call.guard);
     call.stopping = (async () => {
       if (call.onAudio) call.audio.removeListener('audio', call.onAudio);
       if (call.onFault) call.audio.removeListener('fault', call.onFault);
       if (call.onState) call.native.removeListener('state', call.onState);
+      if (call.onTranscript) call.native.removeListener('transcript', call.onTranscript);
       if (call.onFault) call.native.removeListener('fault', call.onFault);
       try {
         await this.clearAudio(call).catch(() => {});

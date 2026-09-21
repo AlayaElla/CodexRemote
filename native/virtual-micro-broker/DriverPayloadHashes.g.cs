@@ -7,7 +7,7 @@ internal static partial class DriverPayloadHashes
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["CodexRemoteVirtualMicro.dll"] = "212928CA0A30313509AE1680D606C0F3EF2A87F5D58E33B1161B7CB15B2D8BF4",
-            ["CodexRemoteVirtualMicro.inf"] = "512742111A36612FCB65A80E0317EB14DC5AC5CDBA3A4EE69A4C53298C2A1BD4",
-            ["codexremotevirtualmicro.cat"] = "94275AA103CC4E7084E76ECFABF3D16FDC6CEFDD40EB7140E68873283E512B0F",
+            ["CodexRemoteVirtualMicro.inf"] = "DDF224E0DF826EBC270D9BF6F8E68628F4B22EA0F707011BB83DE6A120910EB2",
+            ["codexremotevirtualmicro.cat"] = "48DA638582D093228362F3E089218E9379139754D85FB01176CA321C74AB72F1",
         };
 }

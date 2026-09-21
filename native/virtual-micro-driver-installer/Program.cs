@@ -15,21 +15,12 @@ internal static class Program
 
     private static async Task<int> Main(string[] args)
     {
-#if LOCAL_TESTS
-        if (args.SequenceEqual(["--self-test"]))
-        {
-            try { DriverBundleOperationsTests.Run(); DriverRemovalSelfTests.Run(); InstallerMessages.RunSelfTests(); Console.WriteLine("Installer self-tests passed."); return 0; }
-            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
-        }
-        if (args.SequenceEqual(["--audio-signature-smoke"]))
-            return AudioDriverSetup.InspectPackage(Path.Combine(Directory.GetCurrentDirectory(), "native", "virtual-audio-driver", "x64", "Release", "CodexRemoteVirtualAudio")).State == "audio_not_microsoft_signed" ? 0 : 1;
-#endif
         try
         {
             if (args.SequenceEqual(["--elevated-install"]))
-            { var result = SupportsWindowsX64() ? InstallBothElevated() : new BundleOperationResult(new(50, false, false), new(50, false, false)); Show(BundleMessage("安装", result), !result.Success); return result.ExitCode; }
+                return SupportsWindowsX64() ? DriverSetup.InstallElevated(PackageDirectory()) : 50;
             if (args.SequenceEqual(["--elevated-remove"]))
-            { var result = SupportsRemovePlatform() ? RemoveBothElevated() : new BundleOperationResult(new(50, false, false), new(50, false, false)); Show(BundleMessage("删除", result), !result.Success); return result.ExitCode; }
+                return SupportsRemovePlatform() ? DriverSetup.RemoveElevated() : 50;
             if (args.Length != 0) return 2;
 
             return await RunSelectedActionAsync(InstallerDialog.ChooseAction());
@@ -50,7 +41,7 @@ internal static class Program
 
     private static async Task<int> RunOverwriteInstallAsync()
     {
-        var before = InspectPackages();
+        var before = InspectPackage();
         if (!before.CanInstall)
         {
             Show(InstallerMessages.Blocked(before), isError: true);
@@ -60,14 +51,9 @@ internal static class Program
         // Explicit user action requests an overwrite update even if a previous
         // version is ready. The elevated child revalidates the fixed candidate
         // in an administrator-only snapshot before forcing the exact HardwareId.
-        int? exitCode;
-        try { exitCode = await new InstallerPlatform().ElevateAsync(MicroPackageDirectory()); }
-        catch (Win32Exception error) when (error.NativeErrorCode == DriverSetup.CancelExitCode) { exitCode = DriverSetup.CancelExitCode; }
-        if (exitCode == DriverSetup.CancelExitCode)
-        { Show("已取消 Windows 管理员授权，未安装驱动。", isError: false); return 0; }
-        if (exitCode is null)
-        { Show("安装操作仍可能在 Windows 中执行。请稍后重新检查驱动状态。", isError: true); return 1; }
-        return exitCode is 0 or DriverSetup.RebootExitCode ? 0 : 1;
+        var result = await DriverSetup.ExecuteAsync("overwrite", PackageDirectory(), new InstallerPlatform());
+        Show(InstallerMessages.InstallResult(result), isError: !result.Success);
+        return result.Success ? 0 : 1;
     }
 
     private static async Task<int> RunRemoveAsync()
@@ -93,67 +79,29 @@ internal static class Program
             Show("删除操作仍可能在 Windows 中执行。请稍后重新检查驱动状态。", isError: true);
             return 1;
         }
-        return exitCode is 0 or DriverSetup.RebootExitCode ? 0 : 1;
-    }
-
-    private static DriverSetupStatus InspectPackages() => SupportsWindowsX64()
-        ? InspectBoth()
-        : new("unsupported", "驱动安装器仅支持原生 Windows x64。", false, false);
-
-    private static DriverSetupStatus InspectBoth()
-    {
-        var micro = DriverSetup.InspectPackage(MicroPackageDirectory(), DriverSetupNative.Observe(), DriverPackageTrust.VerifyCatalogMembers, DriverPayloadHashes.Verify);
-        if (!micro.CanInstall) return micro;
-        var audio = AudioDriverSetup.InspectPackage(AudioPackageDirectory());
-        // Both packages must pass before the UAC path begins. In particular an
-        // unsigned kernel driver cannot cause a Micro update as a side effect.
-        return audio.CanInstall ? micro : audio;
-    }
-
-    private static BundleOperationResult InstallBothElevated() => WithBundleLock(() =>
-    {
-        AudioDriverSetup.PreparedPackage? audio = null;
-        try
+        if (exitCode == DriverSetup.RebootExitCode)
         {
-            return DriverBundleOperations.Install(
-                () =>
-                {
-                    if (!InspectBoth().CanInstall) return false;
-                    // Freeze and verify audio before the first Micro mutation.
-                    audio = AudioDriverSetup.PrepareElevatedPackage(AudioPackageDirectory());
-                    return true;
-                },
-                () => ComponentResult.FromExitCode(DriverSetup.InstallElevated(MicroPackageDirectory())),
-                () => AudioDriverSetup.InstallPrepared(audio!));
+            Show("驱动删除完成。Windows 要求重启后再检查。", isError: false);
+            return 0;
         }
-        finally { audio?.Dispose(); }
-    });
-
-    private static BundleOperationResult RemoveBothElevated() => WithBundleLock(() =>
-    {
-        // Always attempt both independently: disk payload and signature state
-        // are irrelevant to deletion, and one failure must not skip the other.
-        return DriverBundleOperations.Remove(() =>
+        if (exitCode == DriverSetup.TrustRetainedPartialExitCode)
         {
-            var reboot = false;
-            try { return ComponentResult.FromExitCode(DriverSetup.RemoveElevated(out reboot), reboot); }
-            catch (Exception error) { return ComponentResult.Failure(error, reboot); }
-        }, () => AudioDriverSetup.RemoveComponent());
-    });
-
-    private static BundleOperationResult WithBundleLock(Func<BundleOperationResult> operation)
-    {
-        if (!new WindowsAudioDriverPlatform().IsAdministrator) return new(new(5, false, false), new(5, false, false));
-        // Reuse the Micro mutex for the complete bundle. Its inner synchronous
-        // operations acquire it recursively on this thread, preserving callers.
-        using var mutex = new Mutex(false, @"Global\CodexRemote.VirtualMicro.DriverInstall.v1");
-        bool acquired;
-        try { acquired = mutex.WaitOne(0); }
-        catch (AbandonedMutexException) { acquired = true; }
-        if (!acquired) return new(new(170, false, false), new(170, false, false));
-        try { return operation(); }
-        finally { mutex.ReleaseMutex(); }
+            Show("已处理虚拟 Micro 设备和已确认的驱动包。之前中断的安装仍有未确认的签名记录，本地开发证书暂时保留。", isError: true);
+            return 1;
+        }
+        var after = DriverSetupNative.Observe();
+        if (exitCode == 0 && !after.Installed)
+        {
+            Show("虚拟 Micro 驱动已删除。", isError: false);
+            return 0;
+        }
+        Show($"驱动删除未完成（Windows 代码 {exitCode}）。", isError: true);
+        return 1;
     }
+
+    private static DriverSetupStatus InspectPackage() => SupportsWindowsX64()
+        ? DriverSetup.InspectPackage(PackageDirectory(), DriverSetupNative.Observe(), DriverPackageTrust.VerifyCatalogMembers, DriverPayloadHashes.Verify)
+        : new("unsupported", "驱动安装器仅支持原生 Windows x64。", false, false);
 
     // The UMDF/VHF inbox contract in the fixed INF starts at Windows 11 build
     // 22000. Reject earlier Windows before package inspection or any UAC path.
@@ -172,22 +120,10 @@ internal static class Program
         return !string.IsNullOrWhiteSpace(systemDirectory) && File.Exists(Path.Combine(systemDirectory, "VhfUm.dll"));
     }
 
-    private static string BundleDirectory()
+    private static string PackageDirectory()
     {
         var executable = Environment.ProcessPath ?? throw new IOException("无法定位安装器可执行文件。");
-        return Path.Combine(Path.GetDirectoryName(executable)!, "driver-bundle");
-    }
-    private static string MicroPackageDirectory() => Path.Combine(BundleDirectory(), "micro");
-    private static string AudioPackageDirectory() => Path.Combine(BundleDirectory(), "audio");
-    private static string BundleMessage(string action, BundleOperationResult result)
-    {
-        string Part(string name, ComponentResult item) => !item.Attempted
-            ? $"{name}：未执行" + (item.Code == 0 ? "" : $"（Windows 代码 {item.Code}）")
-            : item.Code != 0 ? $"{name}：失败（Windows 代码 {item.Code}）"
-            : item.Absent ? $"{name}：已不存在"
-            : item.RebootRequired ? $"{name}：已处理，等待重启" : $"{name}：完成";
-        var reboot = result.RebootRequired ? "\nWindows 要求重启后再检查。" : "";
-        return $"驱动{action}结果：\n{Part("虚拟 Micro 控制驱动", result.Micro)}\n{Part("CodexRemote Speakers 音频驱动", result.Audio)}{reboot}";
+        return Path.Combine(Path.GetDirectoryName(executable)!, "driver");
     }
 
     private static void Show(string message, bool isError) => MessageBoxW(IntPtr.Zero, message, "Codex Remote 驱动安装器",
@@ -207,9 +143,9 @@ internal sealed class InstallerPlatform : IDriverSetupPlatform
     private static async Task<int?> ElevateAsync(string argument, string? expectedPackage)
     {
         var executable = Environment.ProcessPath ?? throw new IOException("无法定位安装器可执行文件。");
-        var fixedPackage = Path.Combine(Path.GetDirectoryName(executable)!, "driver-bundle", "micro");
+        var fixedPackage = Path.Combine(Path.GetDirectoryName(executable)!, "driver");
         if (expectedPackage is not null && !string.Equals(expectedPackage, fixedPackage, StringComparison.OrdinalIgnoreCase))
-            throw new IOException("安装器仅接受固定的同级 driver-bundle\\micro 驱动目录。");
+            throw new IOException("安装器仅接受固定的同级 driver 驱动目录。");
         if (!string.Equals(Path.GetFileName(executable), "VirtualMicroDriverInstaller.exe", StringComparison.OrdinalIgnoreCase))
             throw new IOException("请使用发布后的 VirtualMicroDriverInstaller.exe。");
         var start = new ProcessStartInfo(executable) { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden };

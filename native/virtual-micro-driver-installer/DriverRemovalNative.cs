@@ -9,7 +9,7 @@ namespace VirtualMicroBroker;
 internal enum DriverInfAssociation { Valid, Missing, Malformed }
 internal enum PublishedInfProbe { Missing, Owned, ForeignOrUnknown }
 internal sealed record RemovalDevice(long Token, Guid ClassGuid, string? HardwareIds, string? Service, DriverInfAssociation InfAssociation, string? InfName, bool Disconnected);
-internal interface IRemovalPlatform { bool IsWindowsX64 { get; } bool IsAdministrator { get; } IReadOnlyList<RemovalDevice> EnumerateDevices(); int RemoveDevice(RemovalDevice expected, out bool rebootRequired); PublishedInfProbe ProbePublishedInf(string infName); int UninstallPublishedInf(string infName); }
+internal interface IRemovalPlatform { bool IsWindowsX64 { get; } bool IsAdministrator { get; } IReadOnlyList<RemovalDevice> EnumerateDevices(); IReadOnlyList<string> EnumeratePublishedInfs(); int RemoveDevice(RemovalDevice expected, out bool rebootRequired); PublishedInfProbe ProbePublishedInf(string infName); int UninstallPublishedInf(string infName); }
 
 internal static class DriverRemovalNative
 {
@@ -17,6 +17,13 @@ internal static class DriverRemovalNative
     private const string HardwareId = @"ROOT\CodexRemoteVirtualMicro", HostService = "WUDFRd", LegacyService = "CodexRemoteVirtualMicro";
     private static readonly Guid HidClass = new("745a17a0-74d3-11d0-b6fe-00a0c90f57da");
     private static readonly Guid LegacySystemClass = new("4d36e97d-e325-11ce-bfc1-08002be10318");
+    private static readonly Guid UnknownClass = new("4d36e97e-e325-11ce-bfc1-08002be10318");
+    internal static (IReadOnlyList<RemovalDevice> Devices, IReadOnlyList<string> Packages) InspectRemovalTargets()
+    {
+        var platform = new Win32RemovalPlatform();
+        return (platform.EnumerateDevices().Where(IsOwned).ToArray(),
+            platform.EnumeratePublishedInfs().Where(inf => platform.ProbePublishedInf(inf) == PublishedInfProbe.Owned).ToArray());
+    }
     internal static int RemoveInstalledDriver() => RemoveInstalledDriver(out _);
     internal static int RemoveInstalledDriver(out bool rebootRequired) => RemoveInstalledDriver(new Win32RemovalPlatform(), new DriverTrustLedger(), new WindowsLocalDriverSigningPlatform(), out rebootRequired);
 
@@ -30,21 +37,26 @@ internal static class DriverRemovalNative
         if (!platform.IsWindowsX64 || !platform.IsAdministrator) return ErrorAccessDenied;
         var owned = platform.EnumerateDevices().Where(IsOwned).ToArray();
         var ledgerEntries = ledger.Read().ToArray();
-        if (owned.Length == 0 && ledgerEntries.Length == 0) return 0;
+        // Discover packages independently of live nodes so a retry can finish
+        // after a previous attempt removed the device but failed at DriverStore.
+        var discovered = platform.EnumeratePublishedInfs()
+            .Where(inf => platform.ProbePublishedInf(inf) == PublishedInfProbe.Owned).ToArray();
         var firstError = 0;
         foreach (var device in owned) { var error = platform.RemoveDevice(device, out var needsReboot); if (error != 0 && firstError == 0) firstError = error; rebootRequired |= needsReboot; }
         if (firstError != 0) return firstError;
-        if (owned.Any(device => device.InfAssociation == DriverInfAssociation.Malformed)) return ErrorInvalidData;
-        // A legacy exact node may be removed, but a missing association must
-        // keep its trust ledger untouched and report partial cleanup.
-        if (owned.Any(device => device.InfAssociation == DriverInfAssociation.Missing) || ledgerEntries.Any(entry => entry.PendingStage)) return ErrorNotFound;
-        var packages = owned.Select(device => device.InfName!).Concat(ledgerEntries.SelectMany(entry => entry.PublishedInfs)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var packages = owned.Where(device => device.InfAssociation == DriverInfAssociation.Valid).Select(device => device.InfName!)
+            .Concat(discovered).Concat(ledgerEntries.SelectMany(entry => entry.PublishedInfs)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         foreach (var infName in packages)
         {
             var probe = platform.ProbePublishedInf(infName);
             if (probe == PublishedInfProbe.ForeignOrUnknown) return ErrorInvalidData;
             if (probe == PublishedInfProbe.Owned) { var error = platform.UninstallPublishedInf(infName); if (error != 0) return error; }
         }
+        if (!rebootRequired && platform.EnumerateDevices().Any(IsOwned)) return ErrorNotFound;
+        // An interrupted signing transaction can retain trust, but must never
+        // prevent removal of devices and positively identified driver packages.
+        if (owned.Any(device => device.InfAssociation == DriverInfAssociation.Malformed)) return ErrorInvalidData;
+        if (ledgerEntries.Any(entry => entry.PendingStage)) return DriverSetup.TrustRetainedPartialExitCode;
         foreach (var entry in ledgerEntries)
         {
             // The durable entry is the only authority for retrying exact trust
@@ -61,12 +73,13 @@ internal static class DriverRemovalNative
         return rebootRequired ? DriverSetup.RebootExitCode : 0;
     }
 
-    // Current UMDF ownership and the retired KMDF ownership are both strict
-    // triples. Never select by WUDFRd or HIDClass alone.
+    // Require the exact product hardware ID, including for an unbound stub
+    // left by failed installation. Never select by WUDFRd or HIDClass alone.
     private static bool IsOwned(RemovalDevice device) =>
         device.HardwareIds is not null && device.HardwareIds.Split('\0').Any(id => string.Equals(id, HardwareId, StringComparison.OrdinalIgnoreCase)) &&
         ((device.ClassGuid == HidClass && string.Equals(device.Service, HostService, StringComparison.OrdinalIgnoreCase)) ||
-         (device.ClassGuid == LegacySystemClass && string.Equals(device.Service, LegacyService, StringComparison.OrdinalIgnoreCase)));
+         (device.ClassGuid == LegacySystemClass && string.Equals(device.Service, LegacyService, StringComparison.OrdinalIgnoreCase)) ||
+         (string.IsNullOrEmpty(device.Service) && (device.ClassGuid == Guid.Empty || device.ClassGuid == UnknownClass || device.ClassGuid == HidClass)));
 
     private sealed class Win32RemovalPlatform : IRemovalPlatform
     {
@@ -111,7 +124,20 @@ internal static class DriverRemovalNative
             var parameters = DeviceInstallParams.Create(); if (!SetupDiGetDeviceInstallParamsW(set.Handle, ref data, ref parameters)) return LastErrorOrOne();
             rebootRequired = (parameters.Flags & (DiNeedRestart | DiNeedReboot)) != 0; return 0;
         }
-        public int UninstallPublishedInf(string infName) { if (SetupUninstallOEMInfW(infName, 0, IntPtr.Zero)) return 0; var error = LastErrorOrOne(); return error == ErrorFileNotFound ? 0 : error; }
+        public IReadOnlyList<string> EnumeratePublishedInfs()
+        {
+            var windows = Path.GetDirectoryName(Environment.SystemDirectory) ?? throw new IOException("Windows directory is unavailable.");
+            return Directory.EnumerateFiles(Path.Combine(windows, "INF"), "oem*.inf")
+                .Select(path => Path.GetFileName(path)).ToArray();
+        }
+        public int UninstallPublishedInf(string infName)
+        {
+            var probe = ProbePublishedInf(infName);
+            if (probe == PublishedInfProbe.Missing) return 0;
+            if (probe != PublishedInfProbe.Owned) return ErrorInvalidData;
+            if (SetupUninstallOEMInfW(infName, 0, IntPtr.Zero)) return 0;
+            var error = LastErrorOrOne(); return error == ErrorFileNotFound ? 0 : error;
+        }
         public PublishedInfProbe ProbePublishedInf(string infName)
         {
             if (!Regex.IsMatch(infName, "^oem[0-9]{1,4}\\.inf$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)) return PublishedInfProbe.ForeignOrUnknown;
@@ -132,7 +158,7 @@ internal static class DriverRemovalNative
             internal IntPtr Handle { get; }
             // A null class GUID enumerates all ROOT nodes so migration/delete can
             // inspect only the two exact ownership triples above.
-            internal DeviceSet() { Handle = SetupDiGetClassDevsW(IntPtr.Zero, "ROOT", IntPtr.Zero, 0); if (Handle == new IntPtr(-1)) ThrowLastError(); }
+            internal DeviceSet() { const uint DigcfAllClasses = 4; Handle = SetupDiGetClassDevsW(IntPtr.Zero, "ROOT", IntPtr.Zero, DigcfAllClasses); if (Handle == new IntPtr(-1)) ThrowLastError(); }
             internal string? Property(ref DeviceInfo data, uint property)
             {
                 var buffer = new byte[65536]; if (!SetupDiGetDeviceRegistryPropertyW(Handle, ref data, property, out var type, buffer, (uint)buffer.Length, out var needed)) { if (Marshal.GetLastWin32Error() == ErrorPropertyMissing) return null; ThrowLastError(); }

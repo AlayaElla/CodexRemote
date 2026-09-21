@@ -107,7 +107,19 @@ class CodexRealtimeRuntime extends EventEmitter {
       await this.ensure(); const result = await this.readPipe(this.pipePath, this.token, type, request); this.note(result); return result;
     } catch (error) { throw error; }
   }
-  note(state) { if (!state || typeof state !== 'object') return; const changed = JSON.stringify(state) !== JSON.stringify(this.lastState); this.lastState = state; if (changed) this.emit('state', state); }
+  note(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return;
+    const { transcript, ...state } = snapshot;
+    const changed = JSON.stringify(state) !== JSON.stringify(this.lastState);
+    this.lastState = state;
+    if (changed) this.emit('state', state);
+    if (!this.voiceSessionId || !this.owns(state) || state.hostId !== this.ownerContext?.hostId || !state.connected) return;
+    if (!Number.isSafeInteger(transcript?.sequence) || transcript.sequence <= (this.lastTranscript?.sequence || 0)) return;
+    this.lastTranscript = { ...transcript, voiceSessionId: state.voiceSessionId,
+      conversationId: state.conversationId, hostId: state.hostId };
+    this.emit('transcript', this.lastTranscript);
+  }
+  getTranscript() { return this.lastTranscript || null; }
   sameContext(context) { const current = this.getContext(); return current && context && current.taskId === context.taskId && current.hostId === context.hostId && current.streamId === context.streamId && current.generation === context.generation; }
   owns(state) { return state?.voiceSessionId === this.voiceSessionId && state?.conversationId === this.voiceConversationId; }
   armPoll() {
@@ -132,6 +144,8 @@ class CodexRealtimeRuntime extends EventEmitter {
       this.voiceConversationId = state.conversationId;
       if (!state.connected || state.conversationId !== context.taskId || !state.voiceSessionId)
         throw new Error('Codex voice chat did not confirm a connected session for the selected task.');
+      this.lastTranscript = null;
+      this.note(state);
       this.armPoll();
       return { confirmed: true, state };
     });
@@ -152,7 +166,7 @@ class CodexRealtimeRuntime extends EventEmitter {
   async interrupt() { throw new Error('The current Codex renderer exposes no verified native assistant-interrupt control.'); }
   async diagnoseWindows() { return this.enqueue(() => this.request('diagnose', { target: null })); }
   async readState(context) { return this.enqueue(() => this.request('read', context ? { target: context } : {})); }
-  dispose() { clearInterval(this.pollTimer); this.pollTimer = null; const pipePath = this.pipePath, token = this.token; this.pipePath = null; this.token = null; this.owner = null; this.lastState = null; this.ownerContext = null; this.voiceSessionId = null; this.voiceConversationId = null; if (pipePath) void this.readPipe(pipePath, token, 'close').catch(() => {}); }
+  dispose() { clearInterval(this.pollTimer); this.pollTimer = null; const pipePath = this.pipePath, token = this.token; this.pipePath = null; this.token = null; this.owner = null; this.lastState = null; this.lastTranscript = null; this.ownerContext = null; this.voiceSessionId = null; this.voiceConversationId = null; if (pipePath) void this.readPipe(pipePath, token, 'close').catch(() => {}); }
 }
 
 module.exports = CodexRealtimeRuntime;
