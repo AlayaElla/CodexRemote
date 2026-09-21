@@ -7,6 +7,7 @@
     "build:css": "tailwindcss -i ./src/ui/tailwind.css -o ./src/ui/app.css --minify",
     "build:virtual-micro-broker": "dotnet publish native/virtual-micro-broker/VirtualMicroBroker.csproj -c Release -r win-x64 --self-contained false",
     "build:esp32-audio-bridge": "dotnet publish native/esp32-audio-bridge/Esp32AudioBridge.csproj -c Release -r win-x64 --self-contained false",
+    "build:macos-audio-bridge": "swift build --package-path native/macos-audio-bridge -c release",
     "prestart": "npm run build:css",
     "start": "electron .",
     "predev": "npm run build:css",

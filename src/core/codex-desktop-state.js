@@ -1,5 +1,6 @@
 const { EventEmitter } = require('node:events');
 const fsNative = require('node:fs');
+const { codexHome } = require('../platform/codex-paths');
 const path = require('node:path');
 const TOML = require('@iarna/toml');
 const { randomUUID } = require('node:crypto');
@@ -77,11 +78,11 @@ function runtimeState(value) {
 class CodexDesktopState extends EventEmitter {
   constructor(options = {}) {
     super();
-    this.codexHome = options.codexHome || path.join(process.env.USERPROFILE || '', '.codex');
+    this.codexHome = codexHome(options);
     this.fs = options.fs || fsNative;
     this.timers = options.timers || global;
-    this.ipc = options.ipc || new CodexDesktopIpc({ ipcFactory: options.ipcFactory, timers: this.timers });
-    this.taskList = options.taskList === undefined ? (options.fs ? null : new CodexMicroSlots()) : options.taskList;
+    this.ipc = options.ipc || new CodexDesktopIpc({ platform: options.platform, codexHome: this.codexHome, ipcFactory: options.ipcFactory, timers: this.timers });
+    this.taskList = options.taskList === undefined ? (options.fs ? null : new CodexMicroSlots({ platform: options.platform })) : options.taskList;
     this.nativeMicroMapping = this.taskList?.nativeMicroMapping === true;
     this.nativeSnapshot = null;
     this.automaticTasks = []; this.runtimeHints = new Map();

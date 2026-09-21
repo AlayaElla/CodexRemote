@@ -9,8 +9,16 @@ const MAX_PENDING_REQUESTS = 64;
 
 function helperPath(options = {}) {
   if (options.executablePath) return options.executablePath;
-  if (options.resourcesPath) return path.join(options.resourcesPath, 'esp32-audio', 'Esp32AudioBridge.exe');
-  return path.join(__dirname, '..', '..', 'native', 'esp32-audio-bridge', 'bin', 'Release', 'net9.0-windows', 'win-x64', 'publish', 'Esp32AudioBridge.exe');
+  const platform = options.platform || process.platform;
+  if (platform === 'darwin') {
+    if (options.resourcesPath) return path.posix.join(options.resourcesPath, 'esp32-audio', 'CodexRemoteMacAudioBridge');
+    return path.join(__dirname, '..', '..', 'native', 'macos-audio-bridge', '.build', 'release', 'CodexRemoteMacAudioBridge');
+  }
+  if (platform === 'win32') {
+    if (options.resourcesPath) return path.join(options.resourcesPath, 'esp32-audio', 'Esp32AudioBridge.exe');
+    return path.join(__dirname, '..', '..', 'native', 'esp32-audio-bridge', 'bin', 'Release', 'net9.0-windows', 'win-x64', 'publish', 'Esp32AudioBridge.exe');
+  }
+  throw new Error(`ESP32 audio bridge is not available on ${platform}.`);
 }
 
 function bridgeStatus(source = {}) {
@@ -153,10 +161,7 @@ class Esp32AudioBridge extends EventEmitter {
       this.processFault(new Error('ESP32 audio bridge returned invalid JSONL.'), runtime);
       return;
     }
-    if (response && response.event === 'fault') {
-      this.processFault(new Error(response.error || 'ESP32 audio bridge fault.'), runtime);
-      return;
-    }
+    if (response && response.event) return this.handleEvent(response, runtime);
     const pending = this.pending.get(response && response.id);
     if (!pending) return;
     this.pending.delete(response.id);
@@ -171,6 +176,10 @@ class Esp32AudioBridge extends EventEmitter {
     const details = response.result && typeof response.result === 'object' ? response.result : response;
     this.updateStatus(details);
     pending.resolve({ ...response, ...details });
+  }
+
+  handleEvent(response, runtime = this.runtime) {
+    if (response.event === 'fault') this.processFault(new Error(response.error || 'ESP32 audio bridge fault.'), runtime);
   }
 
   request(op, payload = {}, timeoutMs) {

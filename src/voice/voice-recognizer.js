@@ -41,6 +41,7 @@ function defaultConfig() {
       channels: 1,
       opusFrameSamples: 2880
     },
+    realtime: { outputDeviceId: '' },
     virtualMicro: {
       profile: 'codex-micro-v1',
       audioSource: 'esp32',
@@ -99,11 +100,14 @@ function normalizeConfig(input, fallback = defaultConfig()) {
     throw new Error(`Unsupported Virtual Micro audio source: ${virtualMicro.audioSource}`);
   }
   if (virtualMicro.audioDeviceId === null) throw new Error('Virtual Micro audio device id must be a string.');
+  const outputDeviceId = source.realtime?.outputDeviceId ?? fallback.realtime?.outputDeviceId ?? '';
+  if (typeof outputDeviceId !== 'string' || outputDeviceId.length > 1024) throw new Error('无效的实时语音输出设备。');
 
   return {
     mode,
     api,
-    virtualMicro
+    virtualMicro,
+    realtime: { outputDeviceId: outputDeviceId.trim() }
   };
 }
 

@@ -1,6 +1,6 @@
 // Runs in the verified Codex main process. Keep this function self-contained:
 // the bridge transports its source once, then reads through a local named pipe.
-function installMicroRuntime({ pipePath, token }) {
+function installMicroRuntime({ pipePath, token }, buildProfile) {
   const requireNative = process.mainModule.require.bind(process.mainModule);
   const { app, BrowserWindow } = requireNative('electron');
   const fs = requireNative('fs');
@@ -12,13 +12,18 @@ function installMicroRuntime({ pipePath, token }) {
   if (!signalsName) throw new Error('Codex Micro slot module is unavailable');
   const moduleText = fs.readFileSync(path.join(assets, signalsName), 'utf8');
   const initialName = moduleText.match(/from"\.\/(app-initial-[\w-]+\.js)"/)?.[1];
-  const primaryName = moduleText.match(/from"\.\/(app-primary-[\w-]+\.js)"/)?.[1];
-  if (!initialName || !primaryName) throw new Error('Codex Micro module dependencies are unavailable');
+  const bridgeName = names.find(name => /^codex-micro-bridge-[\w-]+\.js$/.test(name));
+  if (!initialName || !bridgeName) throw new Error('Codex Micro module dependencies are unavailable');
+  const profile = buildProfile({ signalsName, signalsText: moduleText,
+    initialText: fs.readFileSync(path.join(assets, initialName), 'utf8'),
+    bridgeText: fs.readFileSync(path.join(assets, bridgeName), 'utf8') });
 
-  async function readRenderer({ signalsName, initialName, primaryName }) {
-    const [signals, initial, primary] = await Promise.all([
-      import(`app://-/assets/${signalsName}`), import(`app://-/assets/${initialName}`), import(`app://-/assets/${primaryName}`)
-    ]);
+  async function readRenderer(profile) {
+    const files = [...new Set([profile.signalsName, ...Object.values(profile).filter(v => v?.file).map(v => v.file)])];
+    const modules = Object.fromEntries(await Promise.all(files.map(async file => [file, await import(`app://-/assets/${file}`)])));
+    const resolve = binding => modules[binding.file][binding.name];
+    const signals = modules[profile.signalsName];
+    signals.r();
     const root = document.getElementById('root');
     if (!root) return null;
     const container = root[Object.keys(root).find(key => key.startsWith('__reactContainer'))];
@@ -29,8 +34,8 @@ function installMicroRuntime({ pipePath, token }) {
       seen.add(fiber);
       for (let hook = fiber.memoizedState, count = 0; hook && count++ < 100; hook = hook.next) {
         const store = hook.memoizedState?.current;
-        if (!store || typeof store.get !== 'function' || typeof store.watch !== 'function' || store.scope !== initial.Een) continue;
-        if (store.get(primary.im) !== true) return null;
+        if (!store || typeof store.get !== 'function' || typeof store.watch !== 'function' || store.scope !== resolve(profile.scope)) continue;
+        if (store.get(resolve(profile.owner)) !== true) return null;
         const slots = store.get(signals.n);
         if (!Array.isArray(slots) || slots.length !== 6) throw new Error('Codex Micro slot schema changed');
         const assignments = store.get(signals.u) || {};
@@ -50,17 +55,16 @@ function installMicroRuntime({ pipePath, token }) {
           lighting,
           // Read the renderer's persisted-atom cache before its asynchronous
           // disk flush. A new thread is bound here at first submission.
-          threadBindings: Object.fromEntries(Object.entries(typeof initial.b9t === 'function'
-            ? initial.b9t('client-thread-bindings-v1', {}) || {} : {}).filter(([client, thread]) =>
+          threadBindings: Object.fromEntries(Object.entries(resolve(profile.bindings)('client-thread-bindings-v1', {}) || {}).filter(([client, thread]) =>
               /^client-new-thread:[\w-]{1,128}$/.test(client) && typeof thread === 'string' &&
               /^[\w-]{1,128}$/.test(thread)).slice(-128)),
-          source: initial.$Zt(store.get, initial.Qtn.agentSource),
+          source: resolve(profile.sourceGetter)(store.get, resolve(profile.config).agentSource),
           slots: slots.map(slot => {
             const key = slot.threadKey;
             const id = typeof key === 'string' && key.startsWith('local:') ? key.slice(6) : null;
             const assignment = assignments[`AG${String(slot.id).padStart(2, '0')}`];
             const hostId = key == null ? null : id == null ? 'cloud' :
-              store.get(initial.Njt, id) || (assignment?.threadKey === key ? assignment.hostId : null) || 'local';
+              store.get(resolve(profile.host), id) || (assignment?.threadKey === key ? assignment.hostId : null) || 'local';
             return { id: slot.id, threadKey: key, hostId, title: slot.title, status: slot.status, selected: slot.selected };
           })
         };
@@ -70,7 +74,7 @@ function installMicroRuntime({ pipePath, token }) {
     return null;
   }
 
-  const rendererCode = `(${readRenderer.toString()})(${JSON.stringify({ signalsName, initialName, primaryName })})`;
+  const rendererCode = `(${readRenderer.toString()})(${JSON.stringify(profile)})`;
   let pendingRead = null;
   const read = () => pendingRead ||= (async () => {
     const windows = BrowserWindow.getAllWindows().filter(window => !window.isDestroyed()
@@ -109,9 +113,14 @@ function installMicroRuntime({ pipePath, token }) {
     });
   });
   server.on('error', () => { for (const socket of sockets) socket.destroy(); });
+  server.on('close', () => clearTimeout(idleTimer));
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(pipePath, () => {
+      if (process.platform === 'darwin') {
+        try { fs.chmodSync(pipePath, 0o600); }
+        catch (error) { server.close(); reject(error); return; }
+      }
       idleTimer = setTimeout(() => server.close(), 30000); idleTimer.unref();
       resolve({ processId: process.pid, appVersion: app.getVersion() });
     });

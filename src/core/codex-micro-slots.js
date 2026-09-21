@@ -1,9 +1,13 @@
 const net = require('node:net');
 const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { randomBytes, randomUUID } = require('node:crypto');
 const WebSocket = require('ws');
 const { installMicroRuntime } = require('../platform/codex-micro-runtime');
+const { buildMicroReadProfile } = require('../platform/codex-micro-read-profile');
+const { macRuntimeExpression } = require('../platform/macos-runtime');
 
 function normalizeMicroSnapshot(value) {
   if (value?.version !== 1 || value.nativeMicroMapping !== true || !['recent', 'pinned', 'priority', 'custom'].includes(value.source)
@@ -27,7 +31,7 @@ function normalizeMicroSnapshot(value) {
   return { ...value, slots, lighting, threadBindings };
 }
 
-function findCodexProcess() {
+function findWindowsCodexProcess() {
   const script = "Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('ChatGPT.exe','Codex.exe') -and $_.ExecutablePath -match '[\\\\/]OpenAI[.]Codex_[^\\\\/]+[\\\\/]app[\\\\/]' -and $_.CommandLine -notmatch '--type=' } | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress";
   return new Promise((resolve, reject) => execFile('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
     { windowsHide: true, encoding: 'utf8', timeout: 8000, maxBuffer: 8192 }, (error, stdout) => {
@@ -38,6 +42,41 @@ function findCodexProcess() {
         resolve({ pid: processes[0].ProcessId, executable: processes[0].ExecutablePath });
       } catch (_) { reject(new Error('未找到可同步的 Codex 客户端')); }
     }));
+}
+
+function parseMacCodexProcesses(stdout) {
+  return String(stdout || '').split(/\r?\n/).map(line => {
+    const match = line.match(/^\s*(\d+)\s+(.+?\/Codex\.app\/Contents\/MacOS\/(?:Codex|ChatGPT))(?:\s|$)/);
+    if (!match || /(?:^|\s)--type=/.test(line)) return null;
+    return { pid: Number(match[1]), executable: match[2] };
+  }).filter(process => process && Number.isInteger(process.pid));
+}
+
+function findMacCodexProcess() {
+  return new Promise((resolve, reject) => execFile('/bin/ps', ['-axo', 'pid=,command='],
+    { encoding: 'utf8', timeout: 8000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      if (error) return reject(error);
+      const processes = parseMacCodexProcesses(stdout);
+      if (processes.length !== 1) return reject(new Error('未找到唯一可同步的 macOS Codex 客户端'));
+      resolve(processes[0]);
+    }));
+}
+
+function findCodexProcess(options = {}) {
+  const platform = options.platform || process.platform;
+  if (platform === 'win32') return findWindowsCodexProcess();
+  if (platform === 'darwin') return findMacCodexProcess();
+  return Promise.reject(new Error(`Codex Micro 同步不支持 ${platform}`));
+}
+
+function runtimeSocketPath(platform, pid, id = randomUUID(), temporaryDirectory = os.tmpdir()) {
+  if (platform === 'win32') return `\\\\.\\pipe\\codex-remote-micro-${pid}-${id}`;
+  if (platform === 'darwin') {
+    const socketPath = path.posix.join(temporaryDirectory, `crm-${id}.sock`);
+    if (Buffer.byteLength(socketPath) > 103) throw new Error('Codex Micro 临时 socket 路径超过 macOS 长度限制');
+    return socketPath;
+  }
+  throw new Error(`Codex Micro 同步不支持 ${platform}`);
 }
 
 function inspectorTargets() {
@@ -84,13 +123,13 @@ async function connectInspector() {
   };
 }
 
-function readPipe(pipePath, token, type = 'read') {
+function readPipe(pipePath, token, type = 'read', payload = {}) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(pipePath);
     socket.setEncoding('utf8');
     let body = '';
     const timer = setTimeout(() => { socket.destroy(); reject(new Error('Codex Micro 同步超时')); }, 5000);
-    socket.on('connect', () => socket.write(JSON.stringify({ token, type }) + '\n'));
+    socket.on('connect', () => socket.write(JSON.stringify({ ...payload, token, type }) + '\n'));
     socket.on('error', error => { clearTimeout(timer); reject(error); });
     socket.on('data', data => {
       body += data.toString('utf8');
@@ -110,7 +149,8 @@ function readPipe(pipePath, token, type = 'read') {
 class CodexMicroSlots {
   constructor(options = {}) {
     this.nativeMicroMapping = true;
-    this.findProcess = options.findProcess || findCodexProcess;
+    this.platform = options.platform || process.platform;
+    this.findProcess = options.findProcess || (() => findCodexProcess({ platform: this.platform }));
     this.connectInspector = options.connectInspector || connectInspector;
     this.readPipe = options.readPipe || readPipe;
     this.activate = options.activate || (pid => process._debugProcess(pid));
@@ -125,6 +165,12 @@ class CodexMicroSlots {
     }
     catch (error) { this.stop(); this.nextAttemptAt = Date.now() + 5000; throw error; }
   }
+  async request(type, payload = {}) {
+    if (this.platform !== 'darwin') throw new Error('Runtime controls require macOS.');
+    if (!this.pipePath) await this._connect();
+    // Never retry an operation after its outcome becomes uncertain.
+    return this.readPipe(this.pipePath, this.token, type, payload);
+  }
   _connect() {
     if (this.connecting) return this.connecting;
     const generation = this.generation;
@@ -137,6 +183,9 @@ class CodexMicroSlots {
     let inspector, activated = false, verified = false;
     try {
       try { inspector = await this.connectInspector(); } catch (_) {
+        if (this.platform === 'win32') {
+          throw new Error(require('../platform/codex-inspector-policy').WINDOWS_INSPECTOR_REQUIRED);
+        }
         this.activate(target.pid); activated = true;
         for (let attempt = 0; attempt < 10; attempt++) {
           await new Promise(resolve => setTimeout(resolve, 100));
@@ -145,12 +194,15 @@ class CodexMicroSlots {
       }
       if (!inspector) throw new Error('无法建立 Codex Micro 本地同步连接');
       const identity = await inspector.evaluate('({pid:process.pid,executable:process.execPath})');
-      if (identity?.pid !== target.pid || identity.executable?.toLowerCase() !== target.executable.toLowerCase()) throw new Error('Codex 进程身份不匹配');
+      const normalizeExecutable = value => typeof value === 'string'
+        ? (this.platform === 'win32' ? value.toLowerCase() : value) : null;
+      if (identity?.pid !== target.pid || normalizeExecutable(identity.executable) !== normalizeExecutable(target.executable)) throw new Error('Codex 进程身份不匹配');
       verified = true;
       if (generation !== this.generation) throw new Error('Codex Micro 同步已取消');
-      const pipePath = `\\\\.\\pipe\\codex-remote-micro-${target.pid}-${randomUUID()}`;
+      const pipePath = runtimeSocketPath(this.platform, target.pid);
       const token = randomBytes(32).toString('hex');
-      await inspector.evaluate(`(${installMicroRuntime.toString()})(${JSON.stringify({ pipePath, token })})`);
+      await inspector.evaluate(this.platform === 'darwin' ? macRuntimeExpression({ pipePath, token })
+        : `(${installMicroRuntime.toString()})(${JSON.stringify({ pipePath, token })},${buildMicroReadProfile.toString()})`);
       if (generation !== this.generation) { void this.readPipe(pipePath, token, 'close').catch(() => {}); throw new Error('Codex Micro 同步已取消'); }
       this.pipePath = pipePath; this.token = token;
     } finally {
@@ -167,4 +219,7 @@ class CodexMicroSlots {
   }
 }
 
-module.exports = { CodexMicroSlots, normalizeMicroSnapshot, findCodexProcess };
+module.exports = {
+  CodexMicroSlots, normalizeMicroSnapshot, findCodexProcess, connectInspector,
+  findWindowsCodexProcess, findMacCodexProcess, parseMacCodexProcesses, runtimeSocketPath
+};

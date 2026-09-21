@@ -190,6 +190,17 @@ document.addEventListener('DOMContentLoaded', () => {
   let latestSavedVoiceStatus = null;
   let virtualMicroDriverChecked = false;
   let virtualMicroDriverGeneration = 0;
+  const macHost = window.electronAPI?.platform === 'darwin';
+  const automaticAudioLabel = macHost ? '自动选择 BlackHole' : '自动选择 VB-CABLE';
+  if (macHost) {
+    const label = document.getElementById('voice-audio-platform-label');
+    if (label) label.textContent = 'macOS 音频通道';
+    if (voiceMicroAudioDevice?.options[0]) voiceMicroAudioDevice.options[0].textContent = automaticAudioLabel;
+    if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = '安装 BlackHole 并刷新；Codex 麦克风选择同一 BlackHole 设备。';
+    if (btnRefreshVirtualMicroDriver) btnRefreshVirtualMicroDriver.classList.add('hidden');
+    if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = 'macOS 使用本机 Codex 控制接口，连接状态见下方。';
+    virtualMicroDriverChecked = true;
+  }
 
   function showVirtualMicroDriverResult(result, fallbackError = '') {
     if (!voiceVirtualMicroDriverStatus) return;
@@ -200,6 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function inspectVirtualMicroDriver() {
+    if (macHost) return;
     if (!window.electronAPI || !window.electronAPI.getVirtualMicroDriverStatus) return;
     const generation = ++virtualMicroDriverGeneration;
     if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = '正在检查驱动状态…';
@@ -246,14 +258,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const devices = Array.isArray(result.devices) ? result.devices : [];
       if (voiceMicroAudioDevice) {
         const selected = voiceMicroAudioDevice.value;
-        voiceMicroAudioDevice.replaceChildren(new Option('自动选择 VB-CABLE', ''));
+        voiceMicroAudioDevice.replaceChildren(new Option(automaticAudioLabel, ''));
         for (const device of devices) voiceMicroAudioDevice.appendChild(new Option(device.name, device.id));
         if (selected && !devices.some(device => device.id === selected)) {
           voiceMicroAudioDevice.appendChild(new Option('已保存的设备（当前不可用）', selected));
         }
         voiceMicroAudioDevice.value = selected;
       }
-      if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = devices.length
+      if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = macHost
+        ? devices.length ? '已检测到音频通道。Codex 麦克风选择同一 BlackHole 设备后保存。'
+          : '未检测到 BlackHole。安装并刷新后，Codex 麦克风选择同一 BlackHole 设备。'
+        : devices.length
         ? '已检测到音频通道。Codex 麦克风选择对应的 CABLE Output 后保存。'
         : '未检测到 VB-CABLE。安装并刷新后，Codex 麦克风选择 CABLE Output。';
     } catch (error) {
@@ -293,7 +308,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (incoming && typeof incoming === 'object') virtualMicroReadiness = { ...virtualMicroReadiness, ...incoming };
     const virtualMicro = virtualMicroReadiness;
     if (!virtualMicro || !voiceVirtualMicroStatus) return;
-    const checks = [
+    const checks = macHost ? [`Codex 本机接口：${virtualMicro.connected ? '已连接' : '未连接'}`] : [
       `驱动：${virtualMicro.driverAvailable ? '已检测' : '未检测'}`,
       `HID：${virtualMicro.hidEnumerated ? '已枚举' : '未枚举'}`,
       `Micro RPC：${virtualMicro.microConnected ? '已握手' : '未握手'}`
@@ -355,6 +370,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function populateVoiceConfig(config) {
     if (!config) return;
+    const realtimeOutput = document.getElementById('voice-realtime-output');
+    const outputId = config.realtime?.outputDeviceId || '';
+    if (realtimeOutput) {
+      if (outputId && !Array.from(realtimeOutput.options).some(option => option.value === outputId)) realtimeOutput.appendChild(new Option('已保存的回答音频设备', outputId));
+      realtimeOutput.value = outputId;
+    }
     if (voiceModeInput) voiceModeInput.value = ['api', 'virtual_micro'].includes(config.mode) ? config.mode : 'virtual_micro';
     const api = config.api || {};
     if (voiceApiBaseUrlInput) voiceApiBaseUrlInput.value = api.baseUrl || 'https://api.openai.com/v1';
@@ -381,6 +402,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function collectVoiceConfig() {
     return {
+      realtime: { outputDeviceId: document.getElementById('voice-realtime-output')?.value || '' },
       mode: voiceModeInput && ['api', 'virtual_micro'].includes(voiceModeInput.value) ? voiceModeInput.value : 'virtual_micro',
       api: {
         baseUrl: voiceApiBaseUrlInput ? voiceApiBaseUrlInput.value.trim() : '',
@@ -396,6 +418,20 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
   }
+
+  document.getElementById('btn-refresh-realtime-audio')?.addEventListener('click', async () => {
+    const status = document.getElementById('voice-realtime-status');
+    const select = document.getElementById('voice-realtime-output');
+    try {
+      const result = await window.electronAPI.listRealtimeAudioDevices();
+      if (!result.success) throw new Error(result.error);
+      const current = select.value;
+      select.replaceChildren(new Option('请选择专属输出设备', ''));
+      for (const device of result.devices) select.appendChild(new Option(device.name || device.deviceName || device.id, device.id));
+      select.value = current;
+      status.textContent = '请选择已分配给 Codex 的专属输出设备，然后保存语音设置。';
+    } catch (error) { status.textContent = error.message; }
+  });
 
   function updateCodexHookInstallUI(status) {
     if (!status) return;
@@ -634,6 +670,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const heroPortLabel = document.getElementById('hero-port-label');
   const metricWsPort = document.getElementById('metric-ws-port');
   const metricCodex = document.getElementById('metric-codex-status');
+  const metricCodexDebug = document.getElementById('metric-codex-debug');
+  const metricCodexDebugDetail = document.getElementById('metric-codex-debug-detail');
   const metricStt = document.getElementById('metric-stt-status');
   const activityList = document.getElementById('activity-list');
   const activityCount = document.getElementById('activity-count');
@@ -675,6 +713,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.electronAPI.onVoiceStatus((voiceStatus) => {
       if (!voiceStatus) return;
+      if (voiceStatus.type === 'realtime_status') {
+        const names = { connecting: '正在连接', listening: '正在聆听', thinking: '正在思考', speaking: '正在回答', muted: '麦克风已静音', ended: '通话已结束', disconnected: '连接已断开', error: '连接失败' };
+        const message = `实时语音：${voiceStatus.message || names[voiceStatus.state] || voiceStatus.state}`;
+        const realtimeStatus = document.getElementById('voice-realtime-status');
+        if (realtimeStatus) realtimeStatus.textContent = message;
+        if (labVoiceStatus) labVoiceStatus.textContent = message;
+        return;
+      }
       const modeLabel = voiceStatus.mode === 'api' ? 'API 转写' : '虚拟 Codex Micro';
       if (voiceStatus.status === 'preparing') {
         if (labVoiceStatus) labVoiceStatus.textContent = `${modeLabel} 正在准备`;
@@ -767,6 +813,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Update Status UI
   function updateStatusUI(status) {
+    updateCodexDebugMetric(status.codexDebug);
     updateCodexHookInstallUI(status.codexHook);
     if (status.connectedDevice) {
       setConnectedState(true, status.connectedDevice);
@@ -801,7 +848,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ? { icon: 'progress_activity', label: '正在重启', tone: 'neutral' }
       : desktopAvailable
         ? { icon: 'check_circle', label: 'Codex 已连接', tone: 'success' }
-        : { icon: 'error', label: desktopControl.supported ? '等待 Codex 连接' : '仅支持 Windows', tone: 'neutral' });
+        : { icon: 'error', label: desktopControl.supported ? '等待 Codex 连接' : '当前系统不支持', tone: 'neutral' });
 
     if (serviceConfigStatus) {
       if (status.isRestartingServices) {
@@ -849,6 +896,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   bindVoiceInputRetry();
+
+  function updateCodexDebugMetric(debug) {
+    if (!metricCodexDebug || !metricCodexDebugDetail) return;
+    metricCodexDebug.hidden = !debug;
+    metricCodexDebugDetail.hidden = !debug;
+    if (!debug) return;
+    const states = {
+      waiting: { icon: 'schedule', label: '调试：等待 Codex', tone: 'neutral' },
+      locating: { icon: 'progress_activity', label: '调试：正在检测', tone: 'neutral' },
+      activating: { icon: 'progress_activity', label: '调试：正在开启', tone: 'neutral' },
+      checking: { icon: 'progress_activity', label: '调试：正在验证', tone: 'neutral' },
+      ready: { icon: 'check_circle', label: '调试：已开启', tone: 'success' },
+      error: { icon: 'error', label: '调试：开启失败', tone: 'warning' }
+    };
+    setMetricState(metricCodexDebug, states[debug.stage] || states.waiting);
+    metricCodexDebugDetail.textContent = debug.message || '';
+  }
 
   function setMetricState(element, { icon, label, tone }) {
     if (!element) return;

@@ -4,6 +4,8 @@ const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
 const VoiceRecognizer = require('../src/voice/voice-recognizer');
+const { helperPath } = require('../src/voice/esp32-audio-bridge');
+const { parseMacCodexProcesses, runtimeSocketPath } = require('../src/core/codex-micro-slots');
 
 function createVirtualController() {
   return Object.assign(new EventEmitter(), {
@@ -24,6 +26,25 @@ function createAudioBridge() {
 }
 
 async function main() {
+  assert.equal(helperPath({ platform: 'win32', resourcesPath: 'C:/app/resources' }).replace(/\\/g, '/'),
+    'C:/app/resources/esp32-audio/Esp32AudioBridge.exe');
+  assert.match(helperPath({ platform: 'win32' }).replace(/\\/g, '/'),
+    /native\/esp32-audio-bridge\/bin\/Release\/net9\.0-windows\/win-x64\/publish\/Esp32AudioBridge\.exe$/);
+  assert.equal(helperPath({ platform: 'darwin', resourcesPath: '/Applications/Codex Remote.app/Contents/Resources' }).replace(/\\/g, '/'),
+    '/Applications/Codex Remote.app/Contents/Resources/esp32-audio/CodexRemoteMacAudioBridge');
+  assert.match(helperPath({ platform: 'darwin' }).replace(/\\/g, '/'),
+    /native\/macos-audio-bridge\/\.build\/release\/CodexRemoteMacAudioBridge$/);
+  assert.throws(() => helperPath({ platform: 'linux' }), /not available on linux/);
+  assert.equal(runtimeSocketPath('win32', 123, 'test-id'), '\\\\.\\pipe\\codex-remote-micro-123-test-id');
+  assert.equal(runtimeSocketPath('darwin', 123, 'test-id', '/tmp'), '/tmp/crm-test-id.sock');
+  assert.throws(() => runtimeSocketPath('darwin', 123, 'test-id', '/' + 'x'.repeat(104)), /长度限制/);
+  assert.throws(() => runtimeSocketPath('linux', 123, 'test-id'), /不支持 linux/);
+  assert.deepEqual(parseMacCodexProcesses([
+    '  123 /Applications/Codex.app/Contents/MacOS/Codex',
+    '  124 /Applications/Codex.app/Contents/Frameworks/Codex Helper.app/Contents/MacOS/Codex Helper --type=renderer',
+    '  125 /Applications/Codex.app/Contents/MacOS/Codex --type=utility'
+  ].join('\n')), [{ pid: 123, executable: '/Applications/Codex.app/Contents/MacOS/Codex' }]);
+
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-remote-voice-test-'));
   const configFile = path.join(tempDir, 'voice-config.json');
   try {

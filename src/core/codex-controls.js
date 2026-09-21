@@ -1,4 +1,5 @@
 const { EventEmitter } = require('events');
+const { controlDelivered } = require('../voice/control-delivery');
 
 const ACTIONS = new Set(['select_task', 'new_task', 'set_model', 'set_effort', 'set_fast', 'refresh_draft_settings']);
 const CONTROL_KEYS = new Set(['ACT06', 'ACT07', 'ACT08', 'ACT09', 'ACT12']);
@@ -234,12 +235,12 @@ class CodexControls extends EventEmitter {
   async _select(slot, generation) {
     const target = this._target(slot);
     const identity = `${target.hostId}:${target.threadId}`;
-    await this.activateMicroTask(target.threadId, target.hostId, () => this._guard(generation));
+    const result = await this.activateMicroTask(target.threadId, target.hostId, () => this._guard(generation));
     this.pendingNewTask = null;
     const current = this.state.getSnapshot().slots.find(item => item.hostId + ':' + item.threadId === identity);
     if (!current) throw new Error('任务绑定已变化，请重新选择。');
     this.state.selectSlot(current.slot);
-    return { delivery: 'submitted_to_hid', outcome: 'requested' };
+    return result;
   }
 
   async activateMicroTask(threadId, hostId = 'local', guard = () => {}) {
@@ -248,6 +249,13 @@ class CodexControls extends EventEmitter {
     if (!snapshot.connected) throw new Error('Codex 已断开。');
     const target = snapshot.slots.find(item => item.threadId === threadId && item.hostId === hostId);
     if (!target) throw new Error('当前任务不在 Micro 的六个槽位中，请先在设备任务菜单选择任务。');
+    const controller = this._controller();
+    if (typeof controller.selectTask === 'function') {
+      const result = await controller.selectTask(threadId, hostId, guard);
+      guard();
+      if (!controlDelivered(result) || result.outcome !== 'confirmed') throw new Error('Codex 任务切换尚未确认。');
+      return result;
+    }
     const config = this.state.getMicroLayout();
     if (typeof config.singleTap !== 'boolean') throw new Error('Micro 任务按键配置尚未同步。');
     const key = `AG${String(target.slot).padStart(2, '0')}`;
@@ -307,7 +315,7 @@ class CodexControls extends EventEmitter {
         if (commandKey(this.state.getMicroLayout(), 'newTask') !== newTaskKey) throw new Error('Micro 新建任务按键配置已变化，请重试。');
         const result = await this._controller().tapKey(newTaskKey);
         this._guard(generation);
-        if (result?.delivery !== 'submitted_to_hid') throw new Error('新建任务按键未投递。');
+        if (!controlDelivered(result)) throw new Error('新建任务按键未投递。');
         if (this.pendingNewTask !== draft) throw new Error('新任务草稿已变化。');
         draft.status = 'editing';
         this._guard(generation);

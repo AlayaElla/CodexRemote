@@ -99,7 +99,7 @@ class WsServer extends EventEmitter {
               // Text JSON Control Frame
               try {
                 const message = JSON.parse(data.toString());
-                console.log('[WebSocket] Received JSON type:', message?.type);
+                if (message?.type !== 'realtime_audio_input') console.log('[WebSocket] Received JSON type:', message?.type);
                 this.emit('device-message', message);
               } catch (err) {
                 console.error('[WebSocket] Failed to parse JSON message:', err.message);
@@ -170,13 +170,14 @@ class WsServer extends EventEmitter {
       timestamp: startedAt
     });
 
-    if (!client || client.readyState !== WebSocket.OPEN) {
-      console.error('[WebSocket] No connected client to send message to');
+    const audioCongested = message?.type === 'realtime_audio' && client?.bufferedAmount > 65536;
+    if (!client || client.readyState !== WebSocket.OPEN || audioCongested) {
+      console.error(audioCongested ? '[WebSocket] Realtime audio queue is congested' : '[WebSocket] No connected client to send message to');
       const delivery = {
         ...baseDelivery,
         phase: 'failed',
         success: false,
-        error: 'No ESP32 device is connected.',
+        error: audioCongested ? 'ESP32 realtime audio queue is congested.' : 'No ESP32 device is connected.',
         durationMs: Date.now() - startedAt,
         timestamp: Date.now()
       };

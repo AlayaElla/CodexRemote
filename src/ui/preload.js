@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  platform: process.platform,
   // Expose main-process event subscriptions to the renderer.
   onDeviceConnected: (callback) => ipcRenderer.on('device-connected', (event, address) => callback(address)),
   onDeviceDisconnected: (callback) => ipcRenderer.on('device-disconnected', () => callback()),
@@ -26,6 +27,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   testVirtualMicroPtt: (active) => ipcRenderer.invoke('test-virtual-micro-ptt', Boolean(active)),
   getVirtualMicroDriverStatus: () => ipcRenderer.invoke('get-virtual-micro-driver-status'),
   listEsp32AudioDevices: () => ipcRenderer.invoke('list-esp32-audio-devices'),
+  listRealtimeAudioDevices: () => ipcRenderer.invoke('list-realtime-audio-devices'),
   repairCodexHooks: () => ipcRenderer.invoke('repair-codex-hooks'),
   restartServices: (config) => ipcRenderer.invoke('restart-services', config),
   generateServiceToken: () => ipcRenderer.invoke('generate-service-token'),

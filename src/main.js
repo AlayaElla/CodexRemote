@@ -4,15 +4,21 @@ const WsServer = require('./transports/ws-server');
 const { DiscoveryServer, getLanAddresses } = require('./transports/discovery-server');
 const AgentBridge = require('./core/agent-bridge');
 const { CodexDesktopState } = require('./core/codex-desktop-state');
+const { CodexMicroSlots } = require('./core/codex-micro-slots');
+const { controlDelivered } = require('./voice/control-delivery');
 const { CodexControls, commandKey } = require('./core/codex-controls');
 const { CodexSubmissionFollow } = require('./core/codex-submission-follow');
 const CodexShortcuts = require('./platform/codex-shortcuts');
+const CodexDebugActivation = require('./platform/codex-debug-activation');
 const CodexConversationStore = require('./core/codex-conversation-store');
 const { CodexMedia } = require('./core/codex-media');
 const CodexMediaTransfer = require('./core/codex-media-transfer');
 const { createCollector, ensureCodexHooks } = require('./collectors');
 const VoiceRecognizer = require('./voice/voice-recognizer');
 const DeviceVoiceSession = require('./voice/device-voice-session');
+const RealtimeSession = require('./voice/realtime-session');
+const RealtimeAudioBridge = require('./voice/realtime-audio-bridge');
+const CodexRealtimeRuntime = require('./platform/codex-realtime-runtime');
 const DeviceBattery = require('./core/device-battery');
 const BridgeConnectionStatus = require('./core/bridge-connection-status');
 const VirtualMicroDriverStatus = require('./voice/virtual-micro/driver-status');
@@ -35,9 +41,11 @@ class CodexRemoteApp {
     this.agentBridge = null;
     this.voiceRecognizer = null;
     this.deviceVoiceSession = null;
+    this.realtimeSession = null;
     this.codexDesktopState = null;
     this.bridgeConnectionStatus = null;
     this.codexControls = null;
+    this.codexDebug = null;
     this.deviceGeneration = 0;
     this.deviceConnectionGeneration = 0;
     this.voiceOperationPending = 0;
@@ -72,12 +80,18 @@ class CodexRemoteApp {
 
     this.serviceConfigFile = path.join(app.getPath('userData'), 'service-config.json');
     this.serviceConfig = loadServiceConfig(this.serviceConfigFile);
+    this.macRuntime = process.platform === 'darwin' ? new CodexMicroSlots({ platform: 'darwin' }) : null;
     this.voiceRecognizer = new VoiceRecognizer({
       configFile: path.join(app.getPath('userData'), 'voice-config.json'),
       providerOptions: {
         virtualMicro: {
           audioBridgeOptions: app.isPackaged ? { resourcesPath: process.resourcesPath } : {},
           controllerOptions: {
+            ...(this.macRuntime ? {
+              runtime: this.macRuntime,
+              getMicroLayout: () => this.codexDesktopState?.getMicroLayout(),
+              getTarget: () => this.getVoiceSubmissionContext()
+            } : {}),
             getBatteryStatus: () => this.deviceBattery.getMicroStatus(),
             ...(app.isPackaged
               ? { resourcesPath: process.resourcesPath }
@@ -104,6 +118,11 @@ class CodexRemoteApp {
     this.createMainWindow();
     this.createTray();
     this.setupIpc();
+    this.codexDebug = new CodexDebugActivation({
+      statusFile: path.join(app.getPath('userData'), 'codex-debug-status.json'),
+      onProgress: () => this.broadcastStatus()
+    });
+    this.codexDebug.start();
     await this.startServices(this.serviceConfig);
     // Do not make window startup wait for the broker handshake (which can take
     // up to 75 seconds), but begin it as soon as the app is ready.
@@ -144,6 +163,7 @@ class CodexRemoteApp {
       : null;
     const microStatus = {
       supported: Boolean(voiceStatus.supported),
+      transport: voiceStatus.transport || null,
       configured: Boolean(voiceStatus.configured),
       connecting: this.microConnecting,
       connected: Boolean(voiceStatus.connected),
@@ -179,7 +199,11 @@ class CodexRemoteApp {
       isWsServerRunning: Boolean(this.wsServer && this.wsServer.isReady),
       isDiscoveryRunning: Boolean(this.discoveryServer && this.discoveryServer.isReady),
       isCodexBridgeRunning: Boolean(this.agentBridge && this.agentBridge.isRunning()),
-      desktopControl: { supported: process.platform === 'win32', available: Boolean(this.codexDesktopState?.connected) },
+      codexDebug: process.platform === 'win32'
+        ? { ...(this.codexDebug?.state || { stage: 'waiting', message: '等待自动开启调试' }) }
+        : null,
+      desktopControl: { supported: ['win32', 'darwin'].includes(process.platform), platform: process.platform,
+        available: Boolean(this.codexDesktopState?.connected) },
       isRestartingServices: this.isRestartingServices,
       voiceMode: voiceStatus.mode,
       voiceProvider: voiceStatus.provider,
@@ -226,12 +250,12 @@ class CodexRemoteApp {
 
   isVoiceBusy() {
     const status = this.voiceRecognizer?.getStatus?.() || {};
-    return Boolean(this.desktopQuestionPending || this.voiceOperationPending || this.deviceVoiceSession?.activeRequestId
+    return Boolean(this.realtimeSession?.busy || this.desktopQuestionPending || this.voiceOperationPending || this.deviceVoiceSession?.activeRequestId
       || status.active || status.releaseUncertain);
   }
 
   async handleDeviceVoice(message) {
-    if (message.type === 'voice_start' && (this.desktopQuestionPending || this.codexControls?.isBusy())) {
+    if (message.type === 'voice_start' && (this.realtimeSession?.busy || this.desktopQuestionPending || this.codexControls?.isBusy())) {
       return this.wsServer.sendToDevice({ type: 'voice_status', state: 'error', requestId: message.requestId,
         message: '请等待任务操作完成。' });
     }
@@ -275,8 +299,36 @@ class CodexRemoteApp {
   createServices(config) {
     this.serviceConfig = config;
     this.wsServer = new WsServer(config.wsPort, { token: config.token });
+    this.realtimeSession = new RealtimeSession({
+      send: message => {
+        const call = this.realtimeSession?.active;
+        if (call && call.context.generation !== this.deviceGeneration) return Promise.resolve(false);
+        return this.wsServer?.sendToDevice(message);
+      },
+      getTarget: message => this.getVoiceSubmissionContext(message),
+      assertTarget: context => {
+        if (!DeviceVoiceSession.sameSubmissionTarget(context, this.getVoiceSubmissionContext())) throw new Error('语音目标任务已变化，通话已结束。');
+      },
+      getConfig: () => this.voiceRecognizer.getConfig(),
+      isOtherVoiceBusy: () => {
+        const voice = this.voiceRecognizer?.getStatus?.() || {};
+        return Boolean(this.deviceVoiceSession?.activeRequestId || this.voiceOperationPending || this.desktopQuestionPending
+          || this.codexControls?.isBusy() || voice.active || voice.releaseUncertain);
+      },
+      audioFactory: () => new RealtimeAudioBridge(app.isPackaged ? { resourcesPath: process.resourcesPath } : {}),
+      nativeFactory: () => new CodexRealtimeRuntime({
+        getMicroLayout: () => this.codexDesktopState?.getMicroLayout(),
+        getController: () => this.voiceRecognizer?.getMicroController(),
+        getContext: () => this.getVoiceSubmissionContext(),
+        activateTask: context => this.codexControls.activateMicroTask(context.taskId, context.hostId)
+      })
+    });
+    this.realtimeSession.on('status', message => {
+      this.sendToWindow('voice-status', { ...message, status: message.state });
+      this.broadcastStatus();
+    });
     this.discoveryServer = new DiscoveryServer(config.wsPort);
-    const shortcuts = new CodexShortcuts();
+    const shortcuts = new CodexShortcuts({ getController: () => this.voiceRecognizer?.getMicroController() });
     this.codexShortcuts = shortcuts;
     void shortcuts.warmKeyboard().catch(error => this.addLog('Voice', 'warning', `Keyboard helper warmup failed: ${error.message}`));
     this.deviceVoiceSession = new DeviceVoiceSession({
@@ -316,7 +368,7 @@ class CodexRemoteApp {
       hookPort: config.hookPort,
       approvalMode: config.approvalMode
     }));
-    this.codexDesktopState = new CodexDesktopState();
+    this.codexDesktopState = new CodexDesktopState(this.macRuntime ? { taskList: this.macRuntime } : {});
     const desktopState = this.codexDesktopState;
     this.bridgeConnectionStatus = new BridgeConnectionStatus({ server: this.wsServer,
       getCodexConnected: () => desktopState.connected });
@@ -440,6 +492,7 @@ class CodexRemoteApp {
   }
 
   async stopServices() {
+    await this.releaseActiveVoice('Background services stopped.');
     const connectionShutdown = this.bridgeConnectionStatus?.stop();
     this.bridgeConnectionStatus = null;
     this.deviceBattery.clear();
@@ -459,7 +512,6 @@ class CodexRemoteApp {
     this.codexDesktopState?.removeAllListeners();
     this.codexControls = null;
     this.codexDesktopState = null;
-    await this.releaseActiveVoice('Background services stopped.');
     const wsServer = this.wsServer;
     const discoveryServer = this.discoveryServer;
     const agentBridge = this.agentBridge;
@@ -488,6 +540,11 @@ class CodexRemoteApp {
 
   async releaseActiveVoice(reason) {
     this.virtualMicroTestRequestId = null;
+    try {
+      await this.realtimeSession?.stop('disconnected', reason);
+    } catch (error) {
+      this.addLog('Voice', 'warning', `Realtime release status failed during ${reason}: ${error.message}`);
+    }
     if (!this.deviceVoiceSession || typeof this.deviceVoiceSession.cancelVirtualMicro !== 'function') return;
     try {
       await this.deviceVoiceSession.cancelVirtualMicro(reason);
@@ -618,10 +675,10 @@ class CodexRemoteApp {
       guard();
       if (commandKey(this.codexDesktopState.getMicroLayout(), 'composer.submit') !== key) throw new Error('Micro 发送绑定已变化。');
       const sent = await controller.tapKey(key);
-      if (sent?.delivery !== 'submitted_to_hid') throw new Error('Micro 发送按键未确认投递。');
+      if (!controlDelivered(sent)) throw new Error('Micro 发送按键未确认投递。');
       guard();
       if (context.draftToken) this.codexControls.noteNativeSubmission(context.draftToken);
-      const result = { success: true, delivery: 'submitted_to_hid', outcome: 'requested' };
+      const result = { success: true, delivery: sent.delivery, outcome: sent.outcome || 'requested' };
       const voiceConfig = this.voiceRecognizer && this.voiceRecognizer.getConfig
         ? this.voiceRecognizer.getConfig()
         : null;
@@ -813,6 +870,7 @@ class CodexRemoteApp {
       if (!this.isAuthorizedMainFrame(event)) return { success: false, error: '无效的语音配置保存请求。' };
       return this.runVoiceTransition(async () => {
         try {
+        if (this.realtimeSession?.busy) throw new Error('请先结束实时语音，再修改音频设备。');
         const saved = await this.voiceRecognizer.saveConfig(config);
         this.addLog('Voice', 'success', `Voice mode saved: ${saved.mode}`);
         this.broadcastStatus();
@@ -822,6 +880,14 @@ class CodexRemoteApp {
         return { success: false, error: error.message };
         }
       });
+    });
+
+    ipcMain.handle('list-realtime-audio-devices', async event => {
+      if (!this.isAuthorizedMainFrame(event)) return { success: false, error: '无效的设备查询。' };
+      const bridge = new RealtimeAudioBridge(app.isPackaged ? { resourcesPath: process.resourcesPath } : {});
+      try { return { success: true, devices: await bridge.listCaptureDevices() }; }
+      catch (error) { return { success: false, error: error.message }; }
+      finally { await bridge.dispose(); }
     });
 
     ipcMain.handle('connect-virtual-micro', async event => {
@@ -970,7 +1036,7 @@ class CodexRemoteApp {
     const wsServer = this.wsServer;
     wsServer.on('device-send', (delivery) => {
       if (this.wsServer !== wsServer) return;
-      if (delivery.message?.type === 'bridge_status') return;
+      if (delivery.message?.type === 'bridge_status' || delivery.message?.type === 'realtime_audio') return;
       this.sendToWindow('device-outbound', delivery.message?.type === 'codex_media_chunk'
         ? { ...delivery, message: { ...delivery.message, data: '[图片分块]' } } : delivery);
     });
@@ -1011,11 +1077,21 @@ class CodexRemoteApp {
     wsServer.on('device-message', async (message) => {
       if (this.wsServer !== wsServer) return;
       if (!message || typeof message !== 'object') return;
+      if (message.type === 'realtime_audio_input') {
+        void this.realtimeSession?.input(message).catch(error => this.addLog('Voice', 'error', error.message));
+        return;
+      }
       this.addLog('Device', 'info', `Received device message [${message.type}]`);
       this.sendToWindow('device-message', message.type === 'codex_interaction_response'
         ? { ...message, answers: message.answers ? '[用户回答]' : undefined } : message);
 
       switch (message.type) {
+        case 'realtime_start':
+        case 'realtime_end':
+        case 'realtime_mute':
+        case 'realtime_interrupt':
+          void this.realtimeSession?.handle(message).catch(error => this.addLog('Voice', 'error', error.message));
+          break;
         case 'device_battery':
           this.deviceBattery.update(message);
           break;
@@ -1238,6 +1314,7 @@ if (!hasSingleInstanceLock) {
       event.preventDefault();
       if (!appInstance.quitCleanupPromise) {
         appInstance.isQuitting = true;
+        appInstance.codexDebug?.stop();
         const cleanup = async () => {
           await appInstance.stopServices();
           if (appInstance.voiceRecognizer && typeof appInstance.voiceRecognizer.dispose === 'function') {

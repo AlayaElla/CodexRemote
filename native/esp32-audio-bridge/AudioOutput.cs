@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 namespace Esp32AudioBridge;
 
 internal sealed record CableOutputDevice(string Id, string Name, string CaptureName);
+internal sealed record CaptureRenderDevice(string Id, string Name);
 internal sealed record DefaultAudioEndpoint(string Flow, string Role, string Id, string Name);
 
 internal interface IAudioOutput : IDisposable
@@ -64,6 +65,33 @@ internal sealed class WasapiCableOutput : IAudioOutput
 
 internal static class CableDeviceCatalog
 {
+    // This catalog intentionally includes no default-device selection. A caller
+    // must name the render endpoint whose audio it is authorized to return.
+    internal static IReadOnlyList<CaptureRenderDevice> ListCaptureRenderDevices()
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        var result = new List<CaptureRenderDevice>();
+        foreach (var render in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+        {
+            result.Add(new CaptureRenderDevice(render.ID, render.FriendlyName));
+            render.Dispose();
+        }
+        return result;
+    }
+
+    internal static MMDevice OpenCaptureRenderExact(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) throw new InvalidOperationException("A render deviceId is required for loopback capture.");
+        using var enumerator = new MMDeviceEnumerator();
+        var device = enumerator.GetDevice(id);
+        if (device.State != DeviceState.Active || device.DataFlow != DataFlow.Render)
+        {
+            device.Dispose();
+            throw new InvalidOperationException("Requested deviceId is not an active render endpoint.");
+        }
+        return device;
+    }
+
     internal static IReadOnlyList<DefaultAudioEndpoint> Defaults()
     {
         using var enumerator = new MMDeviceEnumerator();

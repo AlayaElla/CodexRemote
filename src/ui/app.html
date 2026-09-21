@@ -77,10 +77,14 @@
           <span class="material-symbols-outlined" data-icon="cable">cable</span>
           <h3 class="font-body-main text-body-main font-medium">Codex 桥接监听</h3>
         </div>
-        <div class="status-chip is-success" id="metric-codex-status">
-          <span class="material-symbols-outlined text-[14px]" data-icon="check_circle">check_circle</span>
-          正常就绪
+        <div class="flex items-center gap-2">
+          <div class="status-chip is-success" id="metric-codex-status">
+            <span class="material-symbols-outlined text-[14px]" data-icon="check_circle">check_circle</span>
+            正常就绪
+          </div>
+          <div class="status-chip is-neutral" id="metric-codex-debug" role="status" aria-live="polite" hidden>正在检测调试状态</div>
         </div>
+        <p id="metric-codex-debug-detail" class="font-body-sm text-body-sm text-on-surface-variant" hidden></p>
       </div>
 
       <!-- Grid Item 3 -->
@@ -293,7 +297,7 @@
             </label>
             <div id="voice-esp32-audio-pane" class="rounded-lg border border-outline-variant/40 px-4 py-3 space-y-3">
               <label class="space-y-1 block" for="voice-micro-audio-device">
-                <span class="font-body-sm text-body-sm text-on-surface-variant">Windows 音频通道</span>
+                <span id="voice-audio-platform-label" class="font-body-sm text-body-sm text-on-surface-variant">Windows 音频通道</span>
                 <select id="voice-micro-audio-device" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-3 py-2 font-body-main text-body-sm text-on-surface focus:outline-none focus:border-primary">
                   <option value="">自动选择 VB-CABLE</option>
                 </select>
@@ -301,6 +305,14 @@
               <button type="button" id="btn-refresh-esp32-audio" class="button-secondary px-3">刷新音频设备</button>
               <p id="voice-esp32-audio-devices-status" class="font-body-sm text-body-sm text-on-surface-variant">安装 VB-CABLE 并刷新；Codex 麦克风选择 CABLE Output。</p>
               <p id="voice-esp32-audio-status" class="font-body-sm text-body-sm text-on-surface-variant" aria-live="polite">等待 ESP32 音频。</p>
+              <label class="space-y-1 block" for="voice-realtime-output">
+                <span class="font-body-sm text-body-sm text-on-surface-variant">实时语音 · Codex 回答音频设备</span>
+                <select id="voice-realtime-output" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-3 py-2 font-body-main text-body-sm text-on-surface">
+                  <option value="">请选择专属输出设备</option>
+                </select>
+              </label>
+              <button type="button" id="btn-refresh-realtime-audio" class="button-secondary px-3">刷新回答音频设备</button>
+              <p id="voice-realtime-status" class="font-body-sm text-body-sm text-on-surface-variant" aria-live="polite">选择 Codex 回答使用的专属输出设备，与麦克风注入通道分开。当前使用轮流说话，回答期间暂停麦克风上传。</p>
             </div>
             <div class="rounded-lg bg-surface-container-low px-4 py-3 space-y-1" aria-live="polite">
               <p class="font-body-sm text-body-sm text-on-surface" id="voice-virtual-micro-status">尚未连接 Micro。</p>

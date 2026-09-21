@@ -3,6 +3,7 @@ function isMicroMode(mode) {
 }
 
 const { commandKey } = require('../core/codex-controls');
+const { controlDelivered } = require('./control-delivery');
 
 const MAX_QUEUED_AUDIO_BYTES = 512 * 1024;
 const MAX_QUEUED_AUDIO_FRAMES = 64;
@@ -140,7 +141,7 @@ class DeviceVoiceSession {
     const result = await this.voiceRecognizer.cancel(context && this.cancelNativeDictation && micro
       ? { beforePttRelease: () => this.cancelNativeDictation(context) } : undefined);
     if (Number.isFinite(result?.cancelMs)) this.onLog('info', `Voice cancel timing (ms): ${result.cancelMs}`);
-    if (micro && result?.delivery !== 'submitted_to_hid') throw new Error('PTT release could not be confirmed.');
+    if (micro && !controlDelivered(result)) throw new Error('PTT release could not be confirmed.');
     return result;
   }
 
@@ -158,7 +159,7 @@ class DeviceVoiceSession {
       const requestId = this.activeRequestId;
       try {
         const result = await this.cancelCurrentInput();
-        if (!result || result.delivery !== 'submitted_to_hid') {
+        if (!controlDelivered(result)) {
           throw new Error('PTT release could not be confirmed; check ChatGPT recording state.');
         }
         await this.sendStage('stopped', {
@@ -274,7 +275,7 @@ class DeviceVoiceSession {
         }
         this.activeRequiresDeviceAudio = Boolean(result.acceptsAudio
           || (this.voiceRecognizer.getStatus && this.voiceRecognizer.getStatus().acceptsAudio));
-        if (!result || result.delivery !== 'submitted_to_hid') {
+        if (!controlDelivered(result)) {
           throw new Error('Codex Micro HID PTT press was not acknowledged.');
         }
         await this.sendStage('recording', {
@@ -389,7 +390,7 @@ class DeviceVoiceSession {
           this.audioOverflowed = true;
           this.discardQueuedAudio();
           const result = await this.cancelCurrentInput();
-          if (result?.delivery !== 'submitted_to_hid') throw new Error('PTT release could not be confirmed.');
+          if (!controlDelivered(result)) throw new Error('PTT release could not be confirmed.');
           this.lastCancelledRequestId = message.requestId;
           this.activeMode = null;
           this.activeRequestId = null;
@@ -488,7 +489,7 @@ class DeviceVoiceSession {
           },
           ...(submission.key ? { submissionKey: submission.key } : {})
         });
-        if (!result || result.delivery !== 'submitted_to_hid') {
+        if (!controlDelivered(result)) {
           throw new Error('Codex Micro HID PTT release was not acknowledged.');
         }
         const submissionConfirmed = false;

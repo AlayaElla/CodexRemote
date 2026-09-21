@@ -4,6 +4,7 @@ const { randomUUID } = require('node:crypto');
 const { projectHistory, applyHistoryPatches, recentMessages } = require('./codex-conversation-history');
 const { projectRequest, projectAsyncWidgets, findInteraction, nativeResponse, projectCompletion, turnSlots, applyCompletionPatch } = require('./codex-desktop-interactions');
 const CodexAsyncQuestions = require('./codex-async-questions');
+const { desktopIpcPath, validateDesktopSocket } = require('../platform/codex-paths');
 
 const PIPE_PATH = '\\\\.\\pipe\\codex-ipc';
 const STREAM_METHOD = 'thread-stream-state-changed';
@@ -55,7 +56,9 @@ function patchPath(path) {
 class CodexDesktopIpc extends EventEmitter {
   constructor(options = {}) {
     super();
-    this.pipePath = options.pipePath || PIPE_PATH;
+    this.platform = options.platform || process.platform;
+    this.pipePath = desktopIpcPath(options);
+    this.validateSocket = options.validateSocket || (() => validateDesktopSocket(this.pipePath, { platform: this.platform }));
     this.ipcFactory = options.ipcFactory || (path => net.connect(path));
     this.timers = options.timers || global;
     this.maxFrameBytes = options.maxFrameBytes || MAX_FRAME_BYTES;
@@ -96,7 +99,14 @@ class CodexDesktopIpc extends EventEmitter {
   _open() {
     if (!this.started || this.stopping) return;
     const generation = ++this.connectionGeneration;
-    const socket = this.ipcFactory(this.pipePath);
+    let socket;
+    try {
+      this.validateSocket();
+      socket = this.ipcFactory(this.pipePath);
+    } catch (error) {
+      this._disconnect(error, null, generation);
+      return;
+    }
     this.socket = socket;
     this.buffer = Buffer.alloc(0);
     socket.on('connect', () => {

@@ -89,6 +89,11 @@ async function main() {
     assert.equal(timeoutDelivery.phase, 'timeout');
     assert(timeoutDelivery.durationMs >= 30);
     assert(Date.now() - timeoutStartedAt < 500, 'send timeout must resolve instead of hanging');
+    timeoutServer.connectedClient.bufferedAmount = 65537;
+    const congested = await timeoutServer.sendToDeviceDetailed({ type: 'realtime_audio', data: 'AQID' });
+    assert.equal(congested.success, false);
+    assert.equal(congested.phase, 'failed');
+    assert.match(congested.error, /congested/);
   } finally {
     if (client && client.readyState !== WebSocket.CLOSED) client.close();
     await server.stop();

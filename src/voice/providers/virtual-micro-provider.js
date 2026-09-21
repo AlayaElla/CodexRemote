@@ -1,6 +1,7 @@
 const VoiceProvider = require('./voice-provider');
 const { EventEmitter } = require('events');
 const Esp32AudioBridge = require('../esp32-audio-bridge');
+const { controlDelivered } = require('../control-delivery');
 
 const AUDIO_SOURCES = new Set(['esp32', 'computer']);
 const AUDIO_PREPARATION_CHECK_MS = 2000;
@@ -14,7 +15,8 @@ function normalizeAudioConfig(config = {}) {
   return { audioSource, audioDeviceId: String(config.audioDeviceId || '').trim() };
 }
 
-function loadController() {
+function loadController(options = {}) {
+  if ((options.controllerOptions?.platform || options.platform || process.platform) === 'darwin') return require('../macos-controller');
   try {
     return require('../virtual-micro/controller');
   } catch (error) {
@@ -33,7 +35,7 @@ class VirtualMicroProvider extends VoiceProvider {
       profile: String(config.profile || 'codex-micro-v1'),
       ...normalizeAudioConfig(config)
     };
-    const Controller = options.controller ? null : loadController();
+    const Controller = options.controller ? null : loadController(options);
     this.controller = options.controller || new Controller(this.config, options.controllerOptions || {});
     this.lastError = null;
     this.releaseUncertain = false;
@@ -277,7 +279,7 @@ class VirtualMicroProvider extends VoiceProvider {
       stepStartedAt = performance.now();
       const result = await this.controller.setPtt(true);
       startupTiming.pttMs = Math.round(performance.now() - stepStartedAt);
-      if (!result || result.delivery !== 'submitted_to_hid') {
+      if (!controlDelivered(result)) {
         throw new Error((result && result.error) || 'Virtual Micro HID PTT press was not acknowledged.');
       }
       if (this.releaseUncertain) {
@@ -341,7 +343,7 @@ class VirtualMicroProvider extends VoiceProvider {
           throw new Error('Virtual Micro controller submission operation is unavailable.');
         }
         submission = await this.controller.tapKey(submissionKey);
-        if (!submission || submission.delivery !== 'submitted_to_hid') {
+        if (!controlDelivered(submission)) {
           throw new Error((submission && submission.error) || 'Virtual Micro HID submission was not acknowledged.');
         }
       }
@@ -349,7 +351,7 @@ class VirtualMicroProvider extends VoiceProvider {
         throw new Error('Virtual Micro controller PTT operation is unavailable.');
       }
       const result = await this.controller.setPtt(false);
-      if (!result || result.delivery !== 'submitted_to_hid') {
+      if (!controlDelivered(result)) {
         throw new Error((result && result.error) || 'Virtual Micro HID PTT release was not acknowledged.');
       }
       this.active = false;
@@ -370,7 +372,7 @@ class VirtualMicroProvider extends VoiceProvider {
       await this.cancelAudioImmediately();
       try {
         const released = await this.releaseAll();
-        if (released?.delivery === 'submitted_to_hid') this.releaseUncertain = false;
+        if (controlDelivered(released)) this.releaseUncertain = false;
       } catch (releaseError) {}
       throw error;
     }

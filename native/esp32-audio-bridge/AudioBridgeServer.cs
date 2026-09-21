@@ -8,11 +8,18 @@ internal sealed class AudioBridgeServer
     private readonly BoundedUtf8LineReader input;
     private readonly TextWriter output;
     private readonly Channel<string> incoming = Channel.CreateBounded<string>(new BoundedChannelOptions(8) { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
-    private readonly Channel<string> outgoing = Channel.CreateBounded<string>(new BoundedChannelOptions(64) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+    // Control replies must not wait behind the 50 Hz capture-audio stream.
+    // Audio is bounded and lossy under stdout backpressure; control remains bounded
+    // and fails the helper rather than silently losing a request reply.
+    private readonly Channel<string> controlOutgoing = Channel.CreateBounded<string>(new BoundedChannelOptions(64) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+    private readonly Channel<string> audioOutgoing = Channel.CreateBounded<string>(new BoundedChannelOptions(32) { SingleReader = true, FullMode = BoundedChannelFullMode.DropOldest });
     private readonly CancellationTokenSource eof = new();
     private readonly CancellationTokenSource stopping = new();
     private readonly object sessionGate = new();
     private AudioSession? session;
+    private CaptureAudioSession? captureSession;
+    private string? playbackDeviceId;
+    private string? captureId;
     private bool draining;
     private int inputCompleted;
     private int stopAwaiting;
@@ -41,7 +48,8 @@ internal sealed class AudioBridgeServer
         finally
         {
             CleanupImmediately();
-            outgoing.Writer.TryComplete();
+            controlOutgoing.Writer.TryComplete();
+            audioOutgoing.Writer.TryComplete();
             await Task.WhenAny(writer, Task.Delay(500)).ConfigureAwait(false);
             await Task.WhenAny(reader, Task.Delay(500)).ConfigureAwait(false);
         }
@@ -82,11 +90,14 @@ internal sealed class AudioBridgeServer
             switch (operation)
             {
                 case "list": Reply(id, true, null, null, devices: CableDeviceCatalog.List()); break;
+                case "capture_list": ReplyCaptureDevices(id, CableDeviceCatalog.ListCaptureRenderDevices()); break;
                 case "start": Start(id!, document.RootElement); break;
                 case "append": Append(id!, document.RootElement); break;
                 case "stop": await StopAsync(id!).ConfigureAwait(false); break;
                 case "cancel": Cancel(id!); break;
                 case "discard": await DiscardAsync(id!).ConfigureAwait(false); break;
+                case "capture_start": StartCapture(id!, document.RootElement); break;
+                case "capture_stop": await StopCaptureAsync(id!).ConfigureAwait(false); break;
                 default: Reply(id, false, null, "Unsupported audio bridge operation."); break;
             }
         }
@@ -121,6 +132,7 @@ internal sealed class AudioBridgeServer
             {
                 if (session is not null || draining) throw new InvalidOperationException("An audio session became active while starting this endpoint.");
                 session = active;
+                playbackDeviceId = selected.Id;
             }
             Reply(id, true, new { deviceId = selected.Id, name = selected.Name, captureName = selected.CaptureName, sampleRate = AudioSession.SampleRate, channels = AudioSession.Channels, maxBufferedMs = AudioSession.MaxBufferedMs }, null);
         }
@@ -129,6 +141,91 @@ internal sealed class AudioBridgeServer
             active?.Cancel();
             throw;
         }
+    }
+
+    private void StartCapture(string id, JsonElement root)
+    {
+        if (!Protocol.TryGetOptionalString(root, "deviceId", out var deviceId, out var error) || string.IsNullOrWhiteSpace(deviceId))
+        {
+            Reply(id, false, null, error ?? "capture_start requires a render deviceId.");
+            return;
+        }
+        if (!Protocol.TryGetOptionalString(root, "inputDeviceId", out var inputDeviceId, out error)) { Reply(id, false, null, error); return; }
+        lock (sessionGate)
+        {
+            if (captureSession is not null) { Reply(id, false, null, "A loopback capture session is already active."); return; }
+            if (string.Equals(deviceId, inputDeviceId, StringComparison.Ordinal) || string.Equals(deviceId, playbackDeviceId, StringComparison.Ordinal))
+            {
+                Reply(id, false, null, "Loopback capture cannot use the microphone injection render endpoint.");
+                return;
+            }
+        }
+
+        CaptureAudioSession? active = null;
+        var newCaptureId = Guid.NewGuid().ToString("N");
+        try
+        {
+            var device = CableDeviceCatalog.OpenCaptureRenderExact(deviceId);
+            var name = device.FriendlyName;
+            active = new CaptureAudioSession(device,
+                (packet, sequence) => CapturePacket(newCaptureId, packet, sequence),
+                message => OnCaptureFaulted(newCaptureId, message));
+            lock (sessionGate)
+            {
+                if (captureSession is not null) throw new InvalidOperationException("A loopback capture session became active while starting this endpoint.");
+                captureSession = active;
+                captureId = newCaptureId;
+            }
+            active.Start();
+            Reply(id, true, new { deviceId, name, captureId = newCaptureId, sampleRate = CaptureAudioSession.SampleRate, channels = 1, frameDuration = CaptureAudioSession.FrameDurationMs }, null);
+        }
+        catch
+        {
+            lock (sessionGate)
+            {
+                if (ReferenceEquals(captureSession, active))
+                {
+                    captureSession = null;
+                    captureId = null;
+                }
+            }
+            active?.Dispose();
+            throw;
+        }
+    }
+
+    private async Task StopCaptureAsync(string id)
+    {
+        CaptureAudioSession? active;
+        lock (sessionGate)
+        {
+            active = captureSession;
+            captureSession = null;
+            captureId = null;
+        }
+        if (active is null) { Reply(id, false, null, "No active loopback capture session."); return; }
+        await active.StopAsync().ConfigureAwait(false);
+        Reply(id, true, new { stopped = true }, null);
+    }
+
+    private void CapturePacket(string sessionId, byte[] packet, long sequence)
+    {
+        lock (sessionGate)
+            if (captureSession is null || !string.Equals(captureId, sessionId, StringComparison.Ordinal)) return;
+        SendAudio(JsonSerializer.Serialize(new { @event = "capture_audio", captureId = sessionId, packet = Convert.ToBase64String(packet), sampleRate = CaptureAudioSession.SampleRate, frameDuration = CaptureAudioSession.FrameDurationMs, sequence }, Protocol.Json));
+    }
+
+    private void OnCaptureFaulted(string sessionId, string error)
+    {
+        lock (sessionGate)
+        {
+            if (!string.Equals(captureId, sessionId, StringComparison.Ordinal)) return;
+            captureSession = null;
+            captureId = null;
+        }
+        // Fault callback owns resource cleanup; never make its audio event a
+        // generic helper fault because ESP32-to-VB-CABLE may still be active.
+        SendControl(JsonSerializer.Serialize(new { @event = "capture_fault", captureId = sessionId, error }, Protocol.Json));
     }
 
     private void Append(string id, JsonElement root)
@@ -241,6 +338,7 @@ internal sealed class AudioBridgeServer
             {
                 failed = session;
                 session = null;
+                playbackDeviceId = null;
                 draining = false;
             }
             try { failed?.Cancel(); }
@@ -256,7 +354,11 @@ internal sealed class AudioBridgeServer
     {
         lock (sessionGate)
         {
-            if (ReferenceEquals(session, candidate)) session = null;
+            if (ReferenceEquals(session, candidate))
+            {
+                session = null;
+                playbackDeviceId = null;
+            }
             draining = false;
         }
     }
@@ -265,13 +367,20 @@ internal sealed class AudioBridgeServer
     {
         if (Interlocked.Exchange(ref cleaned, 1) != 0) return;
         AudioSession? active;
+        CaptureAudioSession? activeCapture;
         lock (sessionGate)
         {
             active = session;
             session = null;
+            playbackDeviceId = null;
+            activeCapture = captureSession;
+            captureSession = null;
+            captureId = null;
             draining = false;
         }
         try { active?.Cancel(); }
+        catch { }
+        try { activeCapture?.Dispose(); }
         catch { }
         eof.Cancel();
         stopping.Cancel();
@@ -279,22 +388,33 @@ internal sealed class AudioBridgeServer
 
     private void Reply(string? id, bool ok, object? result, string? error, IReadOnlyList<CableOutputDevice>? devices = null)
     {
-        if (devices is not null) Send(JsonSerializer.Serialize(new { id, ok, devices }, Protocol.Json));
-        else Send(JsonSerializer.Serialize(new { id, ok, result, error }, Protocol.Json));
+        if (devices is not null) SendControl(JsonSerializer.Serialize(new { id, ok, devices }, Protocol.Json));
+        else SendControl(JsonSerializer.Serialize(new { id, ok, result, error }, Protocol.Json));
     }
-    private void Fault(string error) => Send(JsonSerializer.Serialize(new { @event = "fault", error }, Protocol.Json));
-    private void Send(string message) { if (!outgoing.Writer.TryWrite(message)) stopping.Cancel(); }
+    private void ReplyCaptureDevices(string? id, IReadOnlyList<CaptureRenderDevice> devices) => SendControl(JsonSerializer.Serialize(new { id, ok = true, devices }, Protocol.Json));
+    private void Fault(string error) => SendControl(JsonSerializer.Serialize(new { @event = "fault", error }, Protocol.Json));
+    private void SendControl(string message) { if (!controlOutgoing.Writer.TryWrite(message)) stopping.Cancel(); }
+    private void SendAudio(string message) => audioOutgoing.Writer.TryWrite(message);
     private async Task WriteLoopAsync()
     {
         try
         {
-            await foreach (var line in outgoing.Reader.ReadAllAsync().ConfigureAwait(false))
+            while (!stopping.IsCancellationRequested)
             {
-                await output.WriteLineAsync(line).WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
-                await output.FlushAsync().WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+                while (controlOutgoing.Reader.TryRead(out var control)) await WriteLineAsync(control).ConfigureAwait(false);
+                if (audioOutgoing.Reader.TryRead(out var audio)) { await WriteLineAsync(audio).ConfigureAwait(false); continue; }
+                // Do not use WaitAsync(timeout) here: a normal idle timeout is
+                // not a stdout fault. Polling at 10 ms keeps control replies
+                // prompt while letting the low-priority audio queue stay lossy.
+                await Task.Delay(10, stopping.Token).ConfigureAwait(false);
             }
         }
         catch { stopping.Cancel(); }
+    }
+    private async Task WriteLineAsync(string line)
+    {
+        await output.WriteLineAsync(line).WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+        await output.FlushAsync().WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
     }
     private static string SafeError(Exception exception)
     {

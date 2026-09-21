@@ -1,6 +1,6 @@
 # ESP32 Wi-Fi 音频桥接
 
-`Esp32AudioBridge.exe` 是 Windows x64 / .NET 9 的私有 JSONL helper。它只把 ESP32 传来的 16 kHz 单声道裸 Opus 解为 PCM，并经指定的 **VB-CABLE Input** 渲染端点播放；Codex 应选择对应的 **CABLE Output** 作为麦克风。它不打开默认扬声器、不录音、不保存音频，也不控制 PTT。
+`Esp32AudioBridge.exe` 是 Windows x64 / .NET 9 的私有 JSONL helper。`start` 路径把 ESP32 传来的 16 kHz 单声道裸 Opus 解为 PCM，并经指定的 **VB-CABLE Input** 渲染端点播放；Codex 应选择对应的 **CABLE Output** 作为麦克风。独立的 `capture_*` 路径只在上层明确指定一个专属 Windows 渲染端点后，才以 WASAPI loopback 捕获其声音，重采样为 16 kHz 单声道并编码为 20 ms Opus 帧回传。它不选择默认扬声器、不保存音频，也不控制 PTT。
 
 ```powershell
 dotnet run --project native/esp32-audio-bridge/Esp32AudioBridge.csproj -c Release -- --list
@@ -17,6 +17,13 @@ dotnet publish native/esp32-audio-bridge/Esp32AudioBridge.csproj -c Release -r w
 - `start` 可带 `deviceId`。省略或为空时只会选择唯一的 `CABLE Input`；没有或多个匹配端点均返回错误。成功后才打开该端点与开始播放。
 - `append` 带 `{packet:base64}`。单包限制 4096 bytes，成功返回 `{id,ok:true,result:{packets,samples,peak,bufferedMs}}`，其中 `peak` 是 0..1 的归一化 PCM 绝对峰值。PCM 队列最多约 2 秒；溢出会取消本次会话并返回错误。
 - `stop` 有界等待已缓冲 PCM 排空和 350 ms 输出尾部保护（覆盖当前 100 ms WASAPI + 约 149 ms VB-CABLE 内部延迟），再关闭端点；若超过上限仍有 PCM，会取消会话并返回失败，绝不声称已排空。自定义得更高 VB-CABLE 延迟的系统仍应以 `--probe-cable` 验收。`cancel` 立即清空并关闭，不播放尾音。EOF 也立即清理。
+
+实时回传使用独立命令，能与上述 ESP32 输入会话并行：
+
+- `capture_list` 返回 `{id,ok:true,devices:[{id,name}]}`，列出活跃渲染端点；它不会改变原有 `list` 的 VB-CABLE 行为。
+- `capture_start` 必须带 `{deviceId,inputDeviceId?}`。`deviceId` 必须是 `capture_list` 返回的活跃渲染端点；helper 从不隐式选择默认输出。若它与调用者传入的 `inputDeviceId`，或当前 ESP32 麦克风注入使用的渲染端点相同，请求会被拒绝，避免把麦克风注入路径回送。
+- 成功响应包含 `{deviceId,name,captureId,sampleRate:16000,channels:1,frameDuration:20}`。随后 stdout 产生 `{event:"capture_audio",captureId,packet:base64,sampleRate:16000,frameDuration:20,sequence}`。音频事件走一个最多 32 帧的可丢弃队列，stdout 堵塞不会阻塞控制响应。
+- `capture_stop` 停止并清理回环捕获。捕获端故障只产生 `{event:"capture_fault",captureId,error}`，不会关闭仍在运行的 ESP32 输入会话；stdin EOF 会清理两个方向的会话。
 
 正常非 `list` 响应形状为 `{id,ok,result,error}`；异常事件为 `{event:"fault",error}`，其中不会含音频数据。
 

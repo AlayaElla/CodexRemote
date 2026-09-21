@@ -1,6 +1,7 @@
 const fsNative = require('node:fs');
 const path = require('node:path');
 const CodexKeyboardWorker = require('./codex-keyboard-worker');
+const { codexHome } = require('./codex-paths');
 
 function readCurrentKeymap(options) {
   let text;
@@ -22,13 +23,14 @@ class CodexShortcuts {
   constructor(options = {}) {
     this.platform = options.platform || process.platform;
     this.fs = options.fs || fsNative;
-    this.codexHome = options.codexHome || path.join(process.env.USERPROFILE || process.env.HOME || '', '.codex');
+    this.codexHome = codexHome(options);
+    this.getController = options.getController || (() => null);
     this.scriptPath = options.scriptPath || path.join(__dirname, 'codex-shortcuts.ps1');
-    this.worker = new CodexKeyboardWorker(unpackedScriptPath(this.scriptPath), { spawn: options.spawn, timeoutMs: options.timeoutMs });
+    this.worker = this.platform === 'win32' ? new CodexKeyboardWorker(unpackedScriptPath(this.scriptPath), { spawn: options.spawn, timeoutMs: options.timeoutMs }) : null;
   }
 
   warmKeyboard() { return this.platform === 'win32' ? this.worker.warmup() : Promise.resolve(); }
-  dispose() { this.worker.dispose(); }
+  dispose() { this.worker?.dispose(); }
 
   requireBinding(command, key, defaultKey = null) {
     const bindings = readCurrentKeymap(this);
@@ -47,12 +49,14 @@ class CodexShortcuts {
   }
 
   async escape({ stop = false } = {}) {
+    if (this.platform === 'darwin') return this.macController().escape({ stop });
     await this._run(stop ? 'EscapeStop' : 'EscapeCancel');
     return { success: true, delivery: 'submitted_to_keyboard', outcome: 'requested' };
   }
 
   async resolveMicroDraft(context) {
     if (!context?.candidates?.length) return null;
+    if (this.platform === 'darwin') return this.macController().resolveMicroDraft(context);
     this.requireBinding('copyDeeplink', 'Ctrl+Alt+L', 'Ctrl+Alt+L');
     const result = await this._run('ReadTaskLink', { candidates: context.candidates });
     if (result.pending) return null;
@@ -62,6 +66,7 @@ class CodexShortcuts {
 
   validateTextTarget(context) {
     if (!context?.taskId && !context?.draftToken) throw new Error('请选择任务或新建任务。');
+    if (this.platform === 'darwin') return;
     if (context.taskId) {
       this.requireBinding('copyDeeplink', 'Ctrl+Alt+L', 'Ctrl+Alt+L');
       this.requireBinding('focusMainChat', 'Ctrl+Shift+L');
@@ -71,8 +76,15 @@ class CodexShortcuts {
   async pasteText(text, context) {
     if (typeof text !== 'string' || !text.trim() || text.length > 32768) throw new Error('文字为空或超过发送上限。');
     this.validateTextTarget(context);
+    if (this.platform === 'darwin') return this.macController().pasteText(text, context);
     await this._run('PasteText', { text, taskId: context.taskId, draftToken: context.draftToken });
     return { success: true, delivery: 'submitted_to_keyboard', outcome: 'requested' };
+  }
+
+  macController() {
+    const controller = this.getController();
+    if (controller?.getStatus?.().transport !== 'desktop_runtime') throw new Error('macOS Codex 控制器尚未连接。');
+    return controller;
   }
 }
 
