@@ -398,6 +398,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     setVoiceModePaneVisibility();
     void refreshEsp32AudioDevices();
+    void refreshRealtimeAudioDevices();
   }
 
   function collectVoiceConfig() {
@@ -419,19 +420,52 @@ document.addEventListener('DOMContentLoaded', () => {
     };
   }
 
-  document.getElementById('btn-refresh-realtime-audio')?.addEventListener('click', async () => {
+  function isStreamToSpeaker(device) {
+    const name = device.name || device.deviceName || device.id;
+    return name === 'Stream To Speaker' || name.endsWith(' (Stream To Speaker)');
+  }
+
+  function realtimeDeviceLabel(device) {
+    const name = device.name || device.deviceName || device.id;
+    return isStreamToSpeaker(device) ? `${name}（推荐的回答音频输出）` : name;
+  }
+
+  let realtimeAudioRefreshGeneration = 0;
+  async function refreshRealtimeAudioDevices() {
     const status = document.getElementById('voice-realtime-status');
     const select = document.getElementById('voice-realtime-output');
+    if (!status || !select || !window.electronAPI || !window.electronAPI.listRealtimeAudioDevices) return;
+    const generation = ++realtimeAudioRefreshGeneration;
     try {
       const result = await window.electronAPI.listRealtimeAudioDevices();
+      if (generation !== realtimeAudioRefreshGeneration) return;
       if (!result.success) throw new Error(result.error);
       const current = select.value;
       select.replaceChildren(new Option('请选择专属输出设备', ''));
-      for (const device of result.devices) select.appendChild(new Option(device.name || device.deviceName || device.id, device.id));
-      select.value = current;
-      status.textContent = '请选择已分配给 Codex 的专属输出设备，然后保存语音设置。';
-    } catch (error) { status.textContent = error.message; }
-  });
+      const devices = Array.isArray(result.devices) ? result.devices : [];
+      const recommended = devices.filter(isStreamToSpeaker);
+      for (const device of devices) select.appendChild(new Option(realtimeDeviceLabel(device), device.id));
+      if (current && !devices.some(device => device.id === current)) {
+        select.appendChild(new Option('已保存的回答音频设备（当前不可用）', current));
+        select.value = current;
+        status.textContent = '已保存的回答音频设备当前不可用。已保留原配置；请在设备恢复后刷新，或另选设备后保存。';
+      } else if (current) {
+        select.value = current;
+        status.textContent = '已保留已保存的回答音频设备。请确认它只供 Codex 回答使用。';
+      } else if (recommended.length === 1) {
+        select.value = recommended[0].id;
+        status.textContent = '已选中 Stream To Speaker；点击“保存语音设置”后生效。通话时会自动启动原版服务。';
+      } else if (recommended.length === 0) {
+        status.textContent = '未检测到 Stream To Speaker。请安装原版程序后刷新，或选择其他专属输出。';
+      } else {
+        status.textContent = '检测到多个 Stream To Speaker，请保留一个启用的设备后刷新。';
+      }
+    } catch (error) {
+      if (generation === realtimeAudioRefreshGeneration) status.textContent = error.message;
+    }
+  }
+
+  document.getElementById('btn-refresh-realtime-audio')?.addEventListener('click', () => { void refreshRealtimeAudioDevices(); });
 
   function updateCodexHookInstallUI(status) {
     if (!status) return;

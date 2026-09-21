@@ -15,7 +15,7 @@ internal sealed class CaptureAudioSession : IDisposable
     internal const int FrameDurationMs = 20;
     private const int MaxBufferedMs = 1000;
 
-    private readonly WasapiLoopbackCapture capture;
+    private readonly IWaveIn capture;
     private readonly MMDevice device;
     private readonly BufferedWaveProvider input;
     private readonly CancellationTokenSource cancelled = new();
@@ -34,7 +34,9 @@ internal sealed class CaptureAudioSession : IDisposable
         this.packetReady = packetReady;
         this.faulted = faulted;
         this.device = device;
-        capture = new WasapiLoopbackCapture(device);
+        capture = StreamToSpeakerCapture.Matches(device.FriendlyName)
+            ? new StreamToSpeakerCapture(device.ID)
+            : new WasapiLoopbackCapture(device);
         input = new BufferedWaveProvider(capture.WaveFormat)
         {
             BufferLength = Math.Max(capture.WaveFormat.AverageBytesPerSecond * MaxBufferedMs / 1000, capture.WaveFormat.BlockAlign * FrameSamples),

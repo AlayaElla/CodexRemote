@@ -177,8 +177,11 @@ internal static class DriverSetup
         }
     }
 
-    internal static int RemoveElevated()
+    internal static int RemoveElevated() => RemoveElevated(out _);
+
+    internal static int RemoveElevated(out bool rebootRequired)
     {
+        rebootRequired = false;
         using var identity = WindowsIdentity.GetCurrent();
         if (!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator)) return 5;
         // Removal and overwrite installation are mutually exclusive system operations.
@@ -187,7 +190,7 @@ internal static class DriverSetup
         try { acquired = mutex.WaitOne(0); }
         catch (AbandonedMutexException) { acquired = true; }
         if (!acquired) return 170;
-        try { return DriverRemovalNative.RemoveInstalledDriver(); }
+        try { return DriverRemovalNative.RemoveInstalledDriver(out rebootRequired); }
         catch (Win32Exception error) { return error.NativeErrorCode == 0 ? 1 : error.NativeErrorCode; }
         catch { return 1; }
         finally { mutex.ReleaseMutex(); }

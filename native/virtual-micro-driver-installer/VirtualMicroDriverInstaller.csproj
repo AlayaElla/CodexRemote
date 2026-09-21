@@ -21,6 +21,9 @@
     <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(EnableLocalTests)' == 'true'">
+    <DefineConstants>$(DefineConstants);LOCAL_TESTS</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <!-- Reuse the installer-only, reviewed driver setup code without adding it to the normal broker. -->
     <Compile Include="../virtual-micro-broker/DriverSetup.cs" Link="DriverSetup.cs" />
@@ -32,9 +35,15 @@
     <Compile Include="../virtual-micro-broker/TargetMicroSelection.cs" Link="TargetMicroSelection.cs" />
     <Compile Include="../virtual-micro-broker/NativeIo.cs" Link="NativeIo.cs" />
     <EmbeddedResource Include="../virtual-micro-driver/CodexRemoteVirtualMicro.inf" LogicalName="DriverSetup.ExpectedInf" />
+    <EmbeddedResource Include="../virtual-audio-driver/CodexRemoteVirtualAudio.inf" LogicalName="AudioDriverSetup.ExpectedInf" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
     <Compile Remove="**/*SelfTests.cs" />
+    <Compile Remove="DriverBundleOperationsTests.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(EnableLocalTests)' == 'true'">
+    <Compile Include="DriverBundleOperationsTests.cs" />
+    <Compile Include="DriverRemovalSelfTests.cs" />
   </ItemGroup>
 </Project>

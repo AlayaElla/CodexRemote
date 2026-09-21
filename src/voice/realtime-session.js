@@ -101,9 +101,11 @@ class RealtimeSession extends EventEmitter {
       };
       call.audio.on('audio', call.onAudio); call.audio.on('fault', call.onFault);
       call.native.on('state', call.onState); call.native.on('fault', call.onFault);
-      await call.audio.start(call.inputDeviceId);
-      if (this.active !== call || call.cancelled) throw new Error('语音连接已取消。');
+      // Initialize answer capture before opening the microphone render stream.
+      // Opening WASAPI loopback immediately after render startup can block.
       const capture = await call.audio.startCapture(config.realtime.outputDeviceId, call.inputDeviceId);
+      if (this.active !== call || call.cancelled) throw new Error('语音连接已取消。');
+      await call.audio.start(call.inputDeviceId);
       await this.assertTarget(context);
       if (this.active !== call || call.cancelled) throw new Error('语音连接已取消。');
       const result = await call.native.start(context, {

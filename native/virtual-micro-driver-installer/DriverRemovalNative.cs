@@ -17,17 +17,21 @@ internal static class DriverRemovalNative
     private const string HardwareId = @"ROOT\CodexRemoteVirtualMicro", HostService = "WUDFRd", LegacyService = "CodexRemoteVirtualMicro";
     private static readonly Guid HidClass = new("745a17a0-74d3-11d0-b6fe-00a0c90f57da");
     private static readonly Guid LegacySystemClass = new("4d36e97d-e325-11ce-bfc1-08002be10318");
-    internal static int RemoveInstalledDriver() => RemoveInstalledDriver(new Win32RemovalPlatform(), new DriverTrustLedger(), new WindowsLocalDriverSigningPlatform());
+    internal static int RemoveInstalledDriver() => RemoveInstalledDriver(out _);
+    internal static int RemoveInstalledDriver(out bool rebootRequired) => RemoveInstalledDriver(new Win32RemovalPlatform(), new DriverTrustLedger(), new WindowsLocalDriverSigningPlatform(), out rebootRequired);
 
     internal static int RemoveInstalledDriver(IRemovalPlatform platform) => RemoveInstalledDriver(platform, new EmptyLedger(), new NoopSigningPlatform());
 
-    internal static int RemoveInstalledDriver(IRemovalPlatform platform, IDriverTrustLedger ledger, ILocalDriverSigningPlatform signing)
+    internal static int RemoveInstalledDriver(IRemovalPlatform platform, IDriverTrustLedger ledger, ILocalDriverSigningPlatform signing) => RemoveInstalledDriver(platform, ledger, signing, out _);
+
+    internal static int RemoveInstalledDriver(IRemovalPlatform platform, IDriverTrustLedger ledger, ILocalDriverSigningPlatform signing, out bool rebootRequired)
     {
+        rebootRequired = false;
         if (!platform.IsWindowsX64 || !platform.IsAdministrator) return ErrorAccessDenied;
         var owned = platform.EnumerateDevices().Where(IsOwned).ToArray();
         var ledgerEntries = ledger.Read().ToArray();
         if (owned.Length == 0 && ledgerEntries.Length == 0) return 0;
-        var firstError = 0; var rebootRequired = false;
+        var firstError = 0;
         foreach (var device in owned) { var error = platform.RemoveDevice(device, out var needsReboot); if (error != 0 && firstError == 0) firstError = error; rebootRequired |= needsReboot; }
         if (firstError != 0) return firstError;
         if (owned.Any(device => device.InfAssociation == DriverInfAssociation.Malformed)) return ErrorInvalidData;
