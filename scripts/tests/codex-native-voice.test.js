@@ -47,13 +47,14 @@ function surface(options = {}) {
     applyRealtimeMicrophoneMuteState(_scope, muted) { phases.set('microphoneMuted', muted); }
   };
   const originalStart = service.start;
-  const module = { cr: service, fr: 'phase', ur: 'microphoneMuted', mr: 'activity', Lk: 'launch' };
+  const module = { renamedVoiceService: service, fr: 'phase', ur: 'microphoneMuted', mr: 'activity' };
+  const profile = { initialName: 'app-initial-test.js', phase: 'fr', microphoneMuted: 'ur', activity: 'mr' };
   const timers = new Map(); let timerId = 0;
   const context = vm.createContext({ document, navigator: { mediaDevices: media }, HTMLMediaElement: Media,
     setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, clearTimeout: id => timers.delete(id) });
   const serialized = vm.runInContext(`(${nativeVoiceRenderer.toString()})`, context);
   return { context, phases, scope, service, document, media, timers,
-    async call(op, extra = {}) { return serialized({ op, target, routeToken: 'route-1', ...extra }, doc => [doc.button], async () => module); },
+    async call(op, extra = {}) { return serialized({ op, target, routeToken: 'route-1', ...extra }, doc => [doc.button], profile, async () => module); },
     launch: () => service.start(scope, { conversationId: target.taskId, hostId: target.hostId }),
     assertRestored() { assert.equal(document.createElement, originalCreate); assert.equal(media.getUserMedia, originalGet); assert.equal(service.start, originalStart); assert.equal(timers.size, 0); }
   };
@@ -338,6 +339,30 @@ test('captions bound Unicode text and reject other task or unsupported role even
   assert.equal(entry.text.includes('\u0000'), false);
   assert.ok(Buffer.byteLength(entry.text) <= 2048);
   await overlay.call('cleanup', { stop: true });
+});
+
+test('live caption polling refreshes within 100 ms without queuing slow reads', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let reads = 0, release;
+  const native = new CodexRealtimeRuntime({ request: async () => {
+    reads++;
+    if (reads === 1) await new Promise(resolve => { release = resolve; });
+    return { active: false };
+  } });
+  t.after(() => native.dispose());
+  native.armPoll();
+  t.mock.timers.tick(100);
+  assert.equal(reads, 1);
+  t.mock.timers.tick(2000);
+  assert.equal(reads, 1, 'a slow renderer must not build a polling backlog');
+  release();
+  await new Promise(setImmediate);
+  t.mock.timers.tick(100);
+  assert.equal(reads, 2);
+  await new Promise(setImmediate);
+  native.dispose();
+  t.mock.timers.tick(1000);
+  assert.equal(reads, 2);
 });
 
 test('renderer captions pass through runtime and session without republishing voice state', async t => {

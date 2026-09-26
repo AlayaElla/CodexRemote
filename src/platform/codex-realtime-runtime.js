@@ -5,12 +5,11 @@ const WebSocket = require('ws');
 const net = require('node:net');
 const findRealtimeControls = require('./codex-realtime-controls');
 const installRealtimeRuntime = require('./codex-native-voice-host');
+const buildNativeVoiceProfile = require('./codex-native-voice-profile');
 const { nativeVoiceRenderer, startNativeVoice } = require('./codex-native-voice');
 
-// This adapter is deliberately tied to the inspected 26.915.4065.0 renderer.
-// It uses semantic aria names and native task voice runtime checks; neither is
-// an OpenAI public control API.  A changed renderer fails closed.
-const APP_PRIMARY = 'app-primary-355549b35da9.js';
+// This adapter resolves only inspected native voice bindings. A changed
+// renderer fails closed when those bindings cannot be confirmed.
 
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
@@ -94,7 +93,7 @@ class CodexRealtimeRuntime extends EventEmitter {
         const identity = await inspector.evaluate('({pid:process.pid,executable:process.execPath})');
         if (identity?.pid !== target.pid || String(identity.executable || '').toLowerCase() !== String(target.executable || '').toLowerCase()) throw new Error('Codex process identity mismatch.');
         const pipePath = runtimeSocketPath('win32', target.pid, randomUUID()); const token = randomBytes(32).toString('hex');
-        await inspector.evaluate(`(${installRealtimeRuntime.toString()})(${JSON.stringify({ pipePath, token, controlLocatorSource: findRealtimeControls.toString(), rendererSource: nativeVoiceRenderer.toString(), coordinatorSource: startNativeVoice.toString() })})`);
+        await inspector.evaluate(`(${installRealtimeRuntime.toString()})(${JSON.stringify({ pipePath, token, controlLocatorSource: findRealtimeControls.toString(), rendererSource: nativeVoiceRenderer.toString(), coordinatorSource: startNativeVoice.toString() })}, (${buildNativeVoiceProfile.toString()}))`);
         this.pipePath = pipePath; this.token = token; this.owner = target;
       } finally { inspector?.close(); }
     })().finally(() => { this.connecting = null; });
@@ -130,7 +129,7 @@ class CodexRealtimeRuntime extends EventEmitter {
       pending = true;
       void this.request('read').then(state => { if (state.active && this.voiceSessionId && !this.owns(state)) this.emit('fault', new Error('Codex voice session ownership changed.')); })
         .catch(error => this.emit('fault', error)).finally(() => { pending = false; });
-    }, 500);
+    }, 100); // Keep live captions responsive; pending prevents overlapping reads.
     this.pollTimer.unref?.();
   }
   async start(context, route = {}) {
@@ -171,4 +170,3 @@ class CodexRealtimeRuntime extends EventEmitter {
 
 module.exports = CodexRealtimeRuntime;
 module.exports.installRealtimeRuntime = installRealtimeRuntime;
-module.exports.APP_PRIMARY = APP_PRIMARY;

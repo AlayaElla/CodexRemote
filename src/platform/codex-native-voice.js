@@ -1,32 +1,39 @@
-// Version-pinned adapter for Codex's native task voice service. This function is
+// Adapter for Codex's native task voice service. This function is
 // serialized into each renderer; it must not close over Node/module variables.
-async function nativeVoiceRenderer(request, findControls, loadModule = () => import('app://-/assets/app-initial-6c4523b43a11.js')) {
-  const module = await loadModule(), service = module.cr;
+async function nativeVoiceRenderer(request, findControls, profile, loadModule = path => import(path)) {
+  if (!profile || !/^app-initial-[\w-]+\.js$/.test(profile.initialName))
+    throw new Error('当前 Codex 原生语音接口结构无法识别。');
+  const module = await loadModule(`app://-/assets/${profile.initialName}`);
   const key = '__codexRemoteNativeVoiceV1';
-  if (!service || typeof service.start !== 'function' || typeof service.cancelStart !== 'function'
-    || !module.fr || !module.ur || !module.mr) throw new Error('当前 Codex 原生语音接口版本不受支持。');
+  const serviceKey = '__codexRemoteNativeVoiceServiceV1';
+  const isService = value => value && typeof value === 'object' && 'currentAttempt' in value
+    && typeof value.start === 'function' && typeof value.cancelStart === 'function'
+    && typeof value.stop === 'function' && typeof value.applyRealtimeMicrophoneMuteState === 'function';
+  let service = globalThis[serviceKey]?.initialName === profile.initialName ? globalThis[serviceKey].service : null;
+  if (!isService(service)) {
+    const matches = Object.values(module).filter(isService);
+    if (matches.length !== 1) throw new Error('当前 Codex 原生语音服务不可用。');
+    service = matches[0];
+    globalThis[serviceKey] = { initialName: profile.initialName, service };
+  }
+  if (!module[profile.phase] || !module[profile.microphoneMuted] || !module[profile.activity])
+    throw new Error('当前 Codex 原生语音接口结构无法识别。');
   const matching = attempt => attempt?.locator?.conversationId === request.target?.taskId && attempt?.locator?.hostId === request.target?.hostId;
   const owned = () => globalThis[key]?.token === request.routeToken ? globalThis[key] : null;
   const inputId = runtime => runtime?.getInputStream()?.getAudioTracks()[0]?.getSettings()?.deviceId || null;
   const snapshot = () => {
     const route = owned(), attempt = service.currentAttempt;
-    const phase = attempt ? attempt.scope.get(module.fr) : 'inactive';
+    const phase = attempt ? attempt.scope.get(module[profile.phase]) : 'inactive';
     const active = Boolean(attempt), runtime = attempt?.runtime;
     const ours = Boolean(attempt && route?.attempt === attempt);
     const output = ours && route.audio.find(item => item.node.srcObject != null && item.node.srcObject === runtime?.getOutputStream());
     const inputDeviceId = inputId(runtime), outputDeviceId = output?.node?.sinkId || null;
     const routed = Boolean(ours && route.ready && inputDeviceId === route.inputId && outputDeviceId === route.outputId);
-    const microphoneMuted = attempt ? attempt.scope.get(module.ur) : null;
-    const activity = attempt ? attempt.scope.get(module.mr) : 'idle';
+    const microphoneMuted = attempt ? attempt.scope.get(module[profile.microphoneMuted]) : null;
+    const activity = attempt ? attempt.scope.get(module[profile.activity]) : 'idle';
     if (ours && activity === 'speaking') route.awaitingReply = false;
     const thinking = activity === 'thinking' || (ours && (route.awaitingReply || route.runningTurns.size > 0));
-    let error = route?.error || null;
-    if (!error && route) {
-      for (const [scope, previous] of route.launches) {
-        const launch = scope.get(module.Lk);
-        if (launch !== previous && launch?.phase === 'failed') error = launch.error || 'Codex 语音启动失败。';
-      }
-    }
+    const error = route?.error || null;
     return { active, owned: ours, nativeConnected: phase === 'active', connected: phase === 'active' && routed,
       state: !active ? 'ended' : phase === 'stopping' || (ours && route.ready && !routed) ? 'disconnected' : phase !== 'active' ? 'connecting' : microphoneMuted ? 'muted' : activity === 'speaking' ? 'speaking' : thinking ? 'thinking' : 'listening',
       connectionState: phase, microphoneMuted, conversationId: attempt?.locator.conversationId || null,
@@ -108,7 +115,7 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
     if (route.attempt && service.currentAttempt === route.attempt) {
       // cancelStart also handles attempts still preparing, before conversationId
       // and the active phase are installed. Stop must await server cleanup.
-      if (route.attempt.scope.get(module.fr) !== 'active') service.cancelStart(route.attempt.scope);
+      if (route.attempt.scope.get(module[profile.phase]) !== 'active') service.cancelStart(route.attempt.scope);
       else await service.stop(route.attempt.scope, route.attempt.locator.conversationId);
       if (service.currentAttempt === route.attempt) throw new Error('Codex 未确认语音已结束，请在电脑端检查。');
     }
@@ -123,26 +130,9 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
       return matches[0].deviceId;
     };
     const route = { token: request.routeToken, sessionId: request.routeToken, inputId: device('audioinput', request.inputCaptureName), outputId: device('audiooutput', request.outputDeviceName),
-      attempt: null, ready: false, audio: [], restore: [], launches: [], error: null,
+      attempt: null, ready: false, audio: [], restore: [], error: null,
       awaitingReply: false, runningTurns: new Set(), restoreActivity: null,
       captions: [], captionSequence: 0 };
-    // Capture existing launch states for useful errors before a native attempt is
-    // created. Native readiness itself comes from currentAttempt.scope, not React.
-    const root = document.getElementById('root');
-    const container = root?.[Object.keys(root).find(k => k.startsWith('__reactContainer'))];
-    const queue = [container?.stateNode?.current || container], fibers = new Set(), values = new Set();
-    const scan = (value, depth = 0) => {
-      if (!value || typeof value !== 'object' || value.nodeType || ArrayBuffer.isView(value) || values.has(value) || depth > 3) return;
-      values.add(value);
-      if (typeof value.get === 'function' && typeof value.watch === 'function') {
-        try { route.launches.push([value, value.get(module.Lk)]); } catch (_) {}
-      }
-      try { for (const child of Object.values(value)) scan(child, depth + 1); } catch (_) {}
-    };
-    while (queue.length && fibers.size < 30000) {
-      const fiber = queue.pop(); if (!fiber || fibers.has(fiber)) continue; fibers.add(fiber);
-      scan(fiber.memoizedProps); scan(fiber.memoizedState); scan(fiber.stateNode); queue.push(fiber.child, fiber.sibling);
-    }
     globalThis[key] = route;
     try {
       const media = navigator.mediaDevices, descriptor = Object.getOwnPropertyDescriptor(media, 'getUserMedia'), original = media.getUserMedia;
@@ -212,7 +202,7 @@ async function nativeVoiceRenderer(request, findControls, loadModule = () => imp
   if (!route.attempt || service.currentAttempt !== route.attempt || !matching(route.attempt)) throw new Error('Codex 语音会话已变化，已停止控制。');
   if (request.op === 'route') {
     const runtime = route.attempt.runtime;
-    if (route.attempt.scope.get(module.fr) !== 'active') return snapshot();
+    if (route.attempt.scope.get(module[profile.phase]) !== 'active') return snapshot();
     if (inputId(runtime) !== route.inputId) {
       await runtime.refreshMicrophoneInput({ selectedDeviceId: route.inputId });
       if (inputId(runtime) !== route.inputId) throw new Error('Codex 未确认 ESP32 麦克风输入设备。');

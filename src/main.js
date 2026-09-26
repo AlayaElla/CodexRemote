@@ -7,6 +7,7 @@ const { CodexDesktopState } = require('./core/codex-desktop-state');
 const { CodexMicroSlots } = require('./core/codex-micro-slots');
 const { controlDelivered } = require('./voice/control-delivery');
 const { CodexControls, commandKey } = require('./core/codex-controls');
+const { TargetedTextRequests } = require('./core/codex-targeted-text');
 const { CodexSubmissionFollow } = require('./core/codex-submission-follow');
 const CodexShortcuts = require('./platform/codex-shortcuts');
 const CodexDebugActivation = require('./platform/codex-debug-activation');
@@ -45,6 +46,7 @@ class CodexRemoteApp {
     this.codexDesktopState = null;
     this.bridgeConnectionStatus = null;
     this.codexControls = null;
+    this.targetedTextRequests = new TargetedTextRequests();
     this.codexDebug = null;
     this.deviceGeneration = 0;
     this.deviceConnectionGeneration = 0;
@@ -653,19 +655,22 @@ class CodexRemoteApp {
     }
   }
 
-  async sendDesktopText(text, source = 'UI') {
+  async sendDesktopText(text, source = 'UI', requestedTarget = null) {
     let locked = false;
     try {
       if (typeof text !== 'string' || !text.trim() || text.length > 32768) throw new Error('文字为空或超过发送上限。');
       if ((source !== 'Voice' && this.isVoiceBusy()) || this.codexControls?.isBusy()) throw new Error('请等待当前操作结束。');
-      const context = this.getVoiceSubmissionContext();
+      const context = this.getVoiceSubmissionContext(requestedTarget
+        ? { ...requestedTarget, requireTarget: true }
+        : {});
       const shortcuts = this.codexShortcuts;
       const controller = this.voiceRecognizer?.getMicroController?.();
       const key = commandKey(this.codexDesktopState.getMicroLayout(), 'composer.submit');
       if (!key || !controller?.getStatus?.().microConnected) throw new Error('请连接 Codex Micro 并绑定发送命令（CODEX）。');
       shortcuts.validateTextTarget(context);
       const guard = () => {
-        if (this.codexShortcuts !== shortcuts || !DeviceVoiceSession.sameSubmissionTarget(context, this.getVoiceSubmissionContext()))
+        if (this.codexShortcuts !== shortcuts || !DeviceVoiceSession.sameSubmissionTarget(context,
+          this.getVoiceSubmissionContext(requestedTarget ? { ...requestedTarget, requireTarget: true } : {})))
           throw new Error('任务或连接已变化，已取消文字发送。');
       };
       this.voiceOperationPending++; locked = true;
@@ -1135,12 +1140,10 @@ class CodexRemoteApp {
 
         case 'text_input':
           {
-            const inputResult = await this.sendDesktopText(message.text, 'Device');
-            await this.wsServer.sendToDevice({
-              type: inputResult.success ? 'input_result' : 'input_error',
-              requestId: message.requestId,
-              ...inputResult
-            });
+            const generation = this.deviceGeneration;
+            const result = await this.targetedTextRequests.handle(message,
+              request => this.sendDesktopText(request.text, 'Device', request));
+            if (this.wsServer === wsServer && generation === this.deviceGeneration) await this.wsServer.sendToDevice(result);
           }
           break;
 

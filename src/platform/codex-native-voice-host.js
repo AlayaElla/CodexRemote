@@ -1,12 +1,13 @@
 // Serialized into the identity-verified Codex main process.
-function installRealtimeRuntime({ pipePath, token, controlLocatorSource, rendererSource, coordinatorSource }) {
+function installRealtimeRuntime({ pipePath, token, controlLocatorSource, rendererSource, coordinatorSource }, buildNativeVoiceProfile) {
   const requireNative = process.mainModule.require.bind(process.mainModule);
   const { app, BrowserWindow } = requireNative('electron');
   const fs = requireNative('fs'), path = requireNative('path'), net = requireNative('net');
   const assets = path.join(app.getAppPath(), 'webview', 'assets');
-  for (const file of ['app-primary-355549b35da9.js', 'app-initial-6c4523b43a11.js']) {
-    if (!fs.existsSync(path.join(assets, file))) throw new Error('Codex realtime renderer version is unsupported.');
-  }
+  const names = fs.readdirSync(assets);
+  const initial = names.filter(name => /^app-initial-[\w-]+\.js$/.test(name));
+  if (initial.length !== 1) throw new Error('Codex 原生语音资源结构已变化，无法安全启动实时语音。');
+  const profile = buildNativeVoiceProfile({ initialName: initial[0], initialText: fs.readFileSync(path.join(assets, initial[0]), 'utf8') });
   const startNativeVoice = new Function(`return (${coordinatorSource})`)();
   function selectedWindowTask() {
     const root = document.getElementById('root'), container = root?.[Object.keys(root).find(key => key.startsWith('__reactContainer'))];
@@ -29,7 +30,7 @@ function installRealtimeRuntime({ pipePath, token, controlLocatorSource, rendere
   let busy = false, closed = false, owner = null, context = null, routeToken = null, idleTimer;
   const call = async (window, op, extra = {}) => {
     if (!window || window.isDestroyed()) throw new Error('Codex 语音窗口已关闭。');
-    return window.webContents.executeJavaScript(`(${rendererSource})(${JSON.stringify({ op, target: context, routeToken, ...extra })}, (${controlLocatorSource}))`);
+    return window.webContents.executeJavaScript(`(${rendererSource})(${JSON.stringify({ op, target: context, routeToken, ...extra })}, (${controlLocatorSource}), ${JSON.stringify(profile)})`);
   };
   const diagnose = async () => {
     const windows = [];
@@ -49,7 +50,7 @@ function installRealtimeRuntime({ pipePath, token, controlLocatorSource, rendere
       routeToken = requireNative('crypto').randomUUID();
       const surfaces = [], taskWindows = [];
       for (const window of eligible()) {
-        // Empty detached shells have not initialized the version-pinned service.
+        // Empty detached shells have not initialized the voice service.
         // Only skip that known empty shell; real surfaces must all be inspected.
         if (window.webContents.getURL().includes('initialRoute=%2Fdetached-window')) continue;
         surfaces.push(window);

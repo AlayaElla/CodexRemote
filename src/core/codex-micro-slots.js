@@ -12,12 +12,23 @@ const { macRuntimeExpression } = require('../platform/macos-runtime');
 function normalizeMicroSnapshot(value) {
   if (value?.version !== 1 || value.nativeMicroMapping !== true || !['recent', 'pinned', 'priority', 'custom'].includes(value.source)
     || !Array.isArray(value.slots) || value.slots.length !== 6) throw new Error('Codex Micro 槽位数据无效');
+  const threadBindings = Object.fromEntries(Object.entries(value.threadBindings || {}).filter(([client, thread]) =>
+    /^client-new-thread:[\w-]+$/.test(client) && typeof thread === 'string' && /^[\w-]{1,128}$/.test(thread)));
   const slots = value.slots.map((slot, index) => {
     if (slot?.id !== index || (slot.title != null && (typeof slot.title !== 'string' || slot.title.length > 4096))) throw new Error('Codex Micro 槽位顺序无效');
     const key = slot.threadKey;
     if (key == null) return { slot: index, hostId: null, threadId: null, title: slot.title ?? null, nativeStatus: slot.status };
-    if (typeof key !== 'string' || !/^(local|remote):[\w-]{1,128}$/.test(key)
-      || typeof slot.hostId !== 'string' || !/^[\w-]{1,128}$/.test(slot.hostId)) throw new Error('Codex Micro 任务标识无效');
+    if (typeof key !== 'string' || typeof slot.hostId !== 'string' || !/^[\w-]{1,128}$/.test(slot.hostId))
+      throw new Error('Codex Micro 任务标识无效');
+    const provisional = key.startsWith('local:') ? key.slice(6) : null;
+    if (provisional?.startsWith('client-new-thread:')) {
+      if (slot.hostId !== 'local' || !/^client-new-thread:[\w-]{1,128}$/.test(provisional))
+        throw new Error('Codex Micro 任务标识无效');
+      const threadId = threadBindings[provisional] || null;
+      return { slot: index, hostId: threadId ? 'local' : null, threadId,
+        title: slot.title ?? null, nativeStatus: slot.status };
+    }
+    if (!/^(local|remote):[\w-]{1,128}$/.test(key)) throw new Error('Codex Micro 任务标识无效');
     return { slot: index, hostId: slot.hostId, threadId: key.slice(key.indexOf(':') + 1), title: slot.title ?? null, nativeStatus: slot.status };
   });
   const raw = value.lighting;
@@ -26,8 +37,6 @@ function normalizeMicroSnapshot(value) {
     ? { brightnessPercent: raw.brightnessPercent, autoDimMs: raw.autoDimMs,
       activityKey: JSON.stringify(value.slots.map(slot => [slot.threadKey ?? null, slot.status ?? null, slot.selected === true])
         .concat([[typeof raw.voiceState === 'string' ? raw.voiceState.slice(0, 32) : null]])) } : null;
-  const threadBindings = Object.fromEntries(Object.entries(value.threadBindings || {}).filter(([client, thread]) =>
-    /^client-new-thread:[\w-]+$/.test(client) && typeof thread === 'string' && /^[\w-]{1,128}$/.test(thread)));
   return { ...value, slots, lighting, threadBindings };
 }
 
