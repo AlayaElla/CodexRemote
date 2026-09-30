@@ -2,7 +2,8 @@
 
 ## 从源码运行与打包
 
-开发需要 Node.js、npm 和 .NET 9 SDK。驱动构建另需 Visual Studio C++、Windows SDK/WDK。
+开发需要 Node.js 和 npm。Windows 虚拟 Micro 及 ESP32 音频桥另需 .NET 9 SDK；
+驱动构建还需要 Visual Studio C++、Windows SDK/WDK。
 
 ```powershell
 npm ci
@@ -26,6 +27,37 @@ npm run package:driver
 ```
 
 输出：`build/driver/CodexRemote-VirtualMicro-Driver-<版本号>-x64.zip`。流程会构建驱动、建立临时文件快照、生成内置哈希、编译 NativeAOT 安装器并生成 ZIP。也可双击 `scripts/package-virtual-micro-driver.cmd`。
+
+### Linux
+
+Linux 不构建 Windows 驱动和 .NET 音频桥。Linux 主程序复用 Codex 的本地调试
+运行时，支持任务同步、桌面控制、Hooks 和 LAN 设备服务。
+
+```bash
+npm ci
+npm run dev
+npm run package:linux
+```
+
+`package:linux` 生成 AppImage 和 Debian 包，输出仍在 `build/pc/`。Linux 语音
+输入的虚拟 Micro 驱动尚未实现；需要 PipeWire/PulseAudio 桥接时再单独增加原生
+音频后端，不把 Windows 驱动路径带进 Linux 包。
+
+### CLI 语音
+
+纯 CLI Codex 不走桌面版 DOM 控制。`src/cli/codex-voice.js` 通过本地录音命令
+生成 16 kHz 单声道 WAV，调用 `whisper-cli` 输出文字，再连接
+`codex app-server` 的 stdio JSON-RPC，复用同一个 thread 连续发送语音转写。
+
+```bash
+WHISPER_CLI=/path/to/whisper-cli \
+WHISPER_MODEL=/path/to/ggml-small.bin \
+npm run voice:cli
+```
+
+环境变量：`WHISPER_LANGUAGE`、`CODEX_VOICE_RECORDER`、`CODEX_VOICE_INPUT`、
+`CODEX_COMMAND`、`CODEX_APP_SERVER_ARGS` 和 `CODEX_VOICE_CWD`。录音优先使用
+`pw-record`，没有时回退到 `arecord` 或 `ffmpeg`。
 
 ## 项目结构
 

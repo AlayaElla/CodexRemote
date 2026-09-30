@@ -190,15 +190,20 @@ document.addEventListener('DOMContentLoaded', () => {
   let latestSavedVoiceStatus = null;
   let virtualMicroDriverChecked = false;
   let virtualMicroDriverGeneration = 0;
+  const desktopRuntimeHost = ['darwin', 'linux'].includes(window.electronAPI?.platform);
   const macHost = window.electronAPI?.platform === 'darwin';
   const automaticAudioLabel = macHost ? '自动选择 BlackHole' : '自动选择 VB-CABLE';
-  if (macHost) {
+  if (desktopRuntimeHost) {
     const label = document.getElementById('voice-audio-platform-label');
-    if (label) label.textContent = 'macOS 音频通道';
+    if (label) label.textContent = macHost ? 'macOS 音频通道' : 'Linux 音频通道';
     if (voiceMicroAudioDevice?.options[0]) voiceMicroAudioDevice.options[0].textContent = automaticAudioLabel;
-    if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = '安装 BlackHole 并刷新；Codex 麦克风选择同一 BlackHole 设备。';
+    if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = macHost
+      ? '安装 BlackHole 并刷新；Codex 麦克风选择同一 BlackHole 设备。'
+      : 'Linux 桌面控制已支持；音频通道需要 PipeWire/PulseAudio 设备配置。';
     if (btnRefreshVirtualMicroDriver) btnRefreshVirtualMicroDriver.classList.add('hidden');
-    if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = 'macOS 使用本机 Codex 控制接口，连接状态见下方。';
+    if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = macHost
+      ? 'macOS 使用本机 Codex 控制接口，连接状态见下方。'
+      : 'Linux 使用本机 Codex 控制接口，连接状态见下方。';
     virtualMicroDriverChecked = true;
   }
 
@@ -211,7 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function inspectVirtualMicroDriver() {
-    if (macHost) return;
+    if (desktopRuntimeHost) return;
     if (!window.electronAPI || !window.electronAPI.getVirtualMicroDriverStatus) return;
     const generation = ++virtualMicroDriverGeneration;
     if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = '正在检查驱动状态…';

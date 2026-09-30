@@ -49,14 +49,14 @@ class CodexShortcuts {
   }
 
   async escape({ stop = false } = {}) {
-    if (this.platform === 'darwin') return this.macController().escape({ stop });
+    if (['darwin', 'linux'].includes(this.platform)) return this.macController().escape({ stop });
     await this._run(stop ? 'EscapeStop' : 'EscapeCancel');
     return { success: true, delivery: 'submitted_to_keyboard', outcome: 'requested' };
   }
 
   async resolveMicroDraft(context) {
     if (!context?.candidates?.length) return null;
-    if (this.platform === 'darwin') return this.macController().resolveMicroDraft(context);
+    if (['darwin', 'linux'].includes(this.platform)) return this.macController().resolveMicroDraft(context);
     this.requireBinding('copyDeeplink', 'Ctrl+Alt+L', 'Ctrl+Alt+L');
     const result = await this._run('ReadTaskLink', { candidates: context.candidates });
     if (result.pending) return null;
@@ -66,7 +66,7 @@ class CodexShortcuts {
 
   validateTextTarget(context) {
     if (!context?.taskId && !context?.draftToken) throw new Error('请选择任务或新建任务。');
-    if (this.platform === 'darwin') return;
+    if (['darwin', 'linux'].includes(this.platform)) return;
     if (context.taskId) {
       this.requireBinding('copyDeeplink', 'Ctrl+Alt+L', 'Ctrl+Alt+L');
       this.requireBinding('focusMainChat', 'Ctrl+Shift+L');
@@ -76,7 +76,7 @@ class CodexShortcuts {
   async pasteText(text, context) {
     if (typeof text !== 'string' || !text.trim() || text.length > 32768) throw new Error('文字为空或超过发送上限。');
     this.validateTextTarget(context);
-    if (this.platform === 'darwin') return this.macController().pasteText(text, context);
+    if (['darwin', 'linux'].includes(this.platform)) return this.macController().pasteText(text, context);
     await this._run('PasteText', { text, taskId: context.taskId, draftToken: context.draftToken });
     return { success: true, delivery: 'submitted_to_keyboard', outcome: 'requested' };
   }

@@ -8,6 +8,55 @@
 
 准备 Windows 11 x64、.NET 9 Runtime，并在电脑上打开已登录的 Codex。
 
+### Linux 版本
+
+Linux 版本提供 Electron 桌面程序、局域网设备服务、Codex Hooks、任务同步和
+本机 Codex 控制。需要 Linux 上已安装并运行桌面版 Codex，且桌面版允许本地
+调试连接；虚拟 Micro 内核驱动和 Windows 专用音频桥不包含在 Linux 包中。
+
+从源码运行：
+
+```bash
+npm ci
+npm run dev
+```
+
+打包 AppImage 和 Debian 包：
+
+```bash
+npm run package:linux
+```
+
+输出在 `build/pc/`。如果桌面版 Codex 没有被自动发现，可以先手动启动 Codex，
+再重启 Codex Remote；程序会通过本机 `127.0.0.1:9229` 建立受校验的控制连接。
+
+### 纯 CLI Codex 语音
+
+Linux CLI 语音模式使用 [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
+做本地转写，再通过 Codex 的本地 `app-server` 保持同一个 CLI 线程。它不依赖
+Electron、虚拟 Micro 驱动或桌面版 Codex。
+
+先准备 `whisper-cli` 和模型：
+
+```bash
+git clone https://github.com/ggerganov/whisper.cpp
+cmake -S whisper.cpp -B whisper.cpp/build -DWHISPER_BUILD_EXAMPLES=ON
+cmake --build whisper.cpp/build --config Release -j
+bash whisper.cpp/models/download-ggml-model.sh small
+```
+
+运行语音控制：
+
+```bash
+WHISPER_CLI="$PWD/whisper.cpp/build/bin/whisper-cli" \
+WHISPER_MODEL="$PWD/whisper.cpp/models/ggml-small.bin" \
+npm run voice:cli
+```
+
+进入后按 **Enter** 开始录音，再按一次 Enter 停止；转写结果会发送到同一个
+Codex CLI app-server 线程。默认优先使用 `pw-record`，其次使用 `arecord` 或
+`ffmpeg`。可用 `CODEX_VOICE_INPUT` 指定麦克风设备。
+
 ### 1. 安装控制驱动
 
 1. 解压 `CodexRemote-VirtualMicro-Driver-<版本号>-x64.zip`。

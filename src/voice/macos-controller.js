@@ -10,8 +10,10 @@ class MacController extends EventEmitter {
   constructor(config = {}, options = {}) {
     super();
     this.options = options;
-    this.runtime = options.runtime || new CodexMicroSlots({ platform: 'darwin' });
+    this.platform = options.platform || process.platform;
+    this.runtime = options.runtime || new CodexMicroSlots({ platform: this.platform });
     this.execFile = options.execFile || execFile;
+    this.openCommand = options.openCommand || (this.platform === 'linux' ? 'xdg-open' : '/usr/bin/open');
     this.getLayout = options.getMicroLayout || (() => ({}));
     this.queue = Promise.resolve();
     this.pending = 0;
@@ -87,7 +89,7 @@ class MacController extends EventEmitter {
       if (!before.slots.some(slot => slot.threadId === threadId && slot.hostId === hostId)) throw new Error('Micro 槽位已变化。');
       if (before.selectedThreadKey !== `local:${threadId}`) {
         guard();
-        await new Promise((resolve, reject) => this.execFile('/usr/bin/open', [`codex://threads/${encodeURIComponent(threadId)}`],
+        await new Promise((resolve, reject) => this.execFile(this.openCommand, [`codex://threads/${encodeURIComponent(threadId)}`],
           { timeout: 5000, maxBuffer: 4096 }, error => error ? reject(error) : resolve()));
         await this.waitFor(snapshot => { guard(); return snapshot.selectedThreadKey === `local:${threadId}`; });
       }
