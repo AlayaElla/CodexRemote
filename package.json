@@ -12,6 +12,8 @@
     "start": "electron .",
     "predev": "npm run build:css",
     "dev": "electron . --dev",
+    "voice:cli": "node src/cli/codex-voice.js",
+    "package:linux": "npm run build:css && electron-builder --linux AppImage deb",
     "package": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-pc.ps1",
     "portable": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-pc.ps1",
     "package:app": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/package-pc.ps1",
@@ -38,16 +40,6 @@
       "src/platform/codex-micro-draft-link.ps1",
       "src/platform/codex-task-list.ps1"
     ],
-    "extraResources": [
-      {
-        "from": "native/virtual-micro-broker/bin/Release/net9.0-windows/win-x64/publish",
-        "to": "virtual-micro"
-      },
-      {
-        "from": "native/esp32-audio-bridge/bin/Release/net9.0-windows/win-x64/publish",
-        "to": "esp32-audio"
-      }
-    ],
     "directories": {
       "output": "build/pc"
     },
@@ -61,7 +53,25 @@
       "target": "portable",
       "icon": "assets/app-icon.ico",
       "executableName": "CodexRemote",
-      "requestedExecutionLevel": "asInvoker"
+      "requestedExecutionLevel": "asInvoker",
+      "extraResources": [
+        {
+          "from": "native/virtual-micro-broker/bin/Release/net9.0-windows/win-x64/publish",
+          "to": "virtual-micro"
+        },
+        {
+          "from": "native/esp32-audio-bridge/bin/Release/net9.0-windows/win-x64/publish",
+          "to": "esp32-audio"
+        }
+      ]
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Utility",
+      "icon": "assets/app-icon.png",
+      "executableName": "codex-remote",
+      "syncDesktopName": true,
+      "maintainer": "Codex Remote <codex-remote@localhost>"
     }
   }
 }

@@ -15,6 +15,20 @@ function listeners() {
     }));
 }
 
+function linuxListeners({ execFile: run = execFile } = {}) {
+  return new Promise((resolve, reject) => run('ss', ['-ltnp', 'sport', '=', ':9229'],
+    { encoding: 'utf8', timeout: 8000, maxBuffer: 16384 }, (error, stdout) => {
+      if (error && error.code !== 1) return reject(new Error('无法检查 Linux 调试端口占用情况。'));
+      const rows = [];
+      for (const line of String(stdout || '').split(/\r?\n/)) {
+        if (!/127\.0\.0\.1:9229\b/.test(line)) continue;
+        const pid = line.match(/users:\(\("[^"]+",pid=(\d+)/)?.[1];
+        rows.push({ OwningProcess: pid ? Number(pid) : null, LocalAddress: '127.0.0.1' });
+      }
+      resolve(rows);
+    }));
+}
+
 function probeInspector() {
   return new Promise(resolve => {
     const request = http.get('http://127.0.0.1:9229/json/list', { timeout: 1000 }, response => {
@@ -36,7 +50,7 @@ class CodexDebugActivation {
   constructor(options = {}) {
     this.platform = options.platform || process.platform;
     this.findProcess = options.findProcess || findCodexProcess;
-    this.listeners = options.listeners || listeners;
+    this.listeners = options.listeners || (this.platform === 'linux' ? linuxListeners : listeners);
     this.connect = options.connectInspector || connectInspector;
     this.activate = options.activate || (pid => process._debugProcess(pid));
     this.isAlive = options.isAlive || (pid => { try { process.kill(pid, 0); return true; } catch { return false; } });
@@ -81,7 +95,7 @@ class CodexDebugActivation {
     } finally { inspector.close(); }
   }
   start() {
-    if (this.running || this.platform !== 'win32') return;
+    if (this.running || !['win32', 'linux'].includes(this.platform)) return;
     this.running = true;
     const generation = ++this.generation;
     const tick = async () => {
@@ -111,7 +125,7 @@ class CodexDebugActivation {
   enable(isCancelled = () => false) {
     if (this.pending) return this.pending;
     this.pending = Promise.resolve().then(async () => {
-      if (this.platform !== 'win32') throw new Error('自动调试目前支持 Windows。');
+      if (!['win32', 'linux'].includes(this.platform)) throw new Error('自动调试目前支持 Windows 或 Linux。');
       this.progress('locating', '正在检查运行中的 Codex 和调试端口…');
       let target;
       try { target = await this.findProcess(); }

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeMicroSnapshot } = require('../../src/core/codex-micro-slots');
+const { normalizeMicroSnapshot, parseLinuxCodexProcesses, runtimeSocketPath } = require('../../src/core/codex-micro-slots');
 
 const provisional = 'client-new-thread:11111111-2222-3333-4444-555555555555';
 const resolved = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -36,4 +36,18 @@ test('rejects malformed provisional identifiers instead of routing to a guessed 
   const input = snapshot();
   input.slots[0].threadKey += ':extra';
   assert.throws(() => normalizeMicroSnapshot(input), /任务标识无效/);
+});
+
+test('finds the Linux Codex main process and ignores Electron helpers', () => {
+  const processes = parseLinuxCodexProcesses([
+    '  42 /opt/Codex/Codex --no-sandbox',
+    '  43 /opt/Codex/Codex --type=renderer',
+    '  44 /usr/bin/other-app'
+  ].join('\n'));
+  assert.deepEqual(processes, [{ pid: 42, executable: '/opt/Codex/Codex' }]);
+});
+
+test('uses a short Unix socket path on Linux', () => {
+  const path = runtimeSocketPath('linux', 42, 'test', '/tmp');
+  assert.equal(path, '/tmp/crm-test.sock');
 });

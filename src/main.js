@@ -82,7 +82,8 @@ class CodexRemoteApp {
 
     this.serviceConfigFile = path.join(app.getPath('userData'), 'service-config.json');
     this.serviceConfig = loadServiceConfig(this.serviceConfigFile);
-    this.macRuntime = process.platform === 'darwin' ? new CodexMicroSlots({ platform: 'darwin' }) : null;
+    this.macRuntime = ['darwin', 'linux'].includes(process.platform)
+      ? new CodexMicroSlots({ platform: process.platform }) : null;
     this.voiceRecognizer = new VoiceRecognizer({
       configFile: path.join(app.getPath('userData'), 'voice-config.json'),
       providerOptions: {
@@ -201,10 +202,10 @@ class CodexRemoteApp {
       isWsServerRunning: Boolean(this.wsServer && this.wsServer.isReady),
       isDiscoveryRunning: Boolean(this.discoveryServer && this.discoveryServer.isReady),
       isCodexBridgeRunning: Boolean(this.agentBridge && this.agentBridge.isRunning()),
-      codexDebug: process.platform === 'win32'
+      codexDebug: ['win32', 'linux'].includes(process.platform)
         ? { ...(this.codexDebug?.state || { stage: 'waiting', message: '等待自动开启调试' }) }
         : null,
-      desktopControl: { supported: ['win32', 'darwin'].includes(process.platform), platform: process.platform,
+      desktopControl: { supported: ['win32', 'darwin', 'linux'].includes(process.platform), platform: process.platform,
         available: Boolean(this.codexDesktopState?.connected) },
       isRestartingServices: this.isRestartingServices,
       voiceMode: voiceStatus.mode,

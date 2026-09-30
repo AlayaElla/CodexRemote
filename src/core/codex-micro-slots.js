@@ -71,10 +71,32 @@ function findMacCodexProcess() {
     }));
 }
 
+function parseLinuxCodexProcesses(stdout) {
+  return String(stdout || '').split(/\r?\n/).map(line => {
+    const match = line.match(/^\s*(\d+)\s+(.+)$/);
+    if (!match || /(?:^|\s)--type=/.test(match[2])) return null;
+    const command = match[2];
+    if (!/(?:^|[\s/])(Codex|ChatGPT)(?:$|[\s/])/i.test(command)) return null;
+    const executable = command.split(/\s+/)[0];
+    return { pid: Number(match[1]), executable };
+  }).filter(process => process && Number.isInteger(process.pid));
+}
+
+function findLinuxCodexProcess() {
+  return new Promise((resolve, reject) => execFile('/bin/ps', ['-axo', 'pid=,command='],
+    { encoding: 'utf8', timeout: 8000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      if (error) return reject(error);
+      const processes = parseLinuxCodexProcesses(stdout);
+      if (processes.length !== 1) return reject(new Error('未找到唯一可同步的 Linux Codex 客户端'));
+      resolve(processes[0]);
+    }));
+}
+
 function findCodexProcess(options = {}) {
   const platform = options.platform || process.platform;
   if (platform === 'win32') return findWindowsCodexProcess();
   if (platform === 'darwin') return findMacCodexProcess();
+  if (platform === 'linux') return findLinuxCodexProcess();
   return Promise.reject(new Error(`Codex Micro 同步不支持 ${platform}`));
 }
 
@@ -83,6 +105,11 @@ function runtimeSocketPath(platform, pid, id = randomUUID(), temporaryDirectory 
   if (platform === 'darwin') {
     const socketPath = path.posix.join(temporaryDirectory, `crm-${id}.sock`);
     if (Buffer.byteLength(socketPath) > 103) throw new Error('Codex Micro 临时 socket 路径超过 macOS 长度限制');
+    return socketPath;
+  }
+  if (platform === 'linux') {
+    const socketPath = path.posix.join(temporaryDirectory, `crm-${id}.sock`);
+    if (Buffer.byteLength(socketPath) > 107) throw new Error('Codex Micro 临时 socket 路径过长');
     return socketPath;
   }
   throw new Error(`Codex Micro 同步不支持 ${platform}`);
@@ -175,7 +202,7 @@ class CodexMicroSlots {
     catch (error) { this.stop(); this.nextAttemptAt = Date.now() + 5000; throw error; }
   }
   async request(type, payload = {}) {
-    if (this.platform !== 'darwin') throw new Error('Runtime controls require macOS.');
+    if (!['darwin', 'linux'].includes(this.platform)) throw new Error('Runtime controls require macOS or Linux.');
     if (!this.pipePath) await this._connect();
     // Never retry an operation after its outcome becomes uncertain.
     return this.readPipe(this.pipePath, this.token, type, payload);
@@ -210,8 +237,8 @@ class CodexMicroSlots {
       if (generation !== this.generation) throw new Error('Codex Micro 同步已取消');
       const pipePath = runtimeSocketPath(this.platform, target.pid);
       const token = randomBytes(32).toString('hex');
-      await inspector.evaluate(this.platform === 'darwin' ? macRuntimeExpression({ pipePath, token })
-        : `(${installMicroRuntime.toString()})(${JSON.stringify({ pipePath, token })},${buildMicroReadProfile.toString()})`);
+      await inspector.evaluate(this.platform === 'win32' ? `(${installMicroRuntime.toString()})(${JSON.stringify({ pipePath, token })},${buildMicroReadProfile.toString()})`
+        : macRuntimeExpression({ pipePath, token }));
       if (generation !== this.generation) { void this.readPipe(pipePath, token, 'close').catch(() => {}); throw new Error('Codex Micro 同步已取消'); }
       this.pipePath = pipePath; this.token = token;
     } finally {
@@ -230,5 +257,6 @@ class CodexMicroSlots {
 
 module.exports = {
   CodexMicroSlots, normalizeMicroSnapshot, findCodexProcess, connectInspector,
-  findWindowsCodexProcess, findMacCodexProcess, parseMacCodexProcesses, runtimeSocketPath
+  findWindowsCodexProcess, findMacCodexProcess, findLinuxCodexProcess,
+  parseMacCodexProcesses, parseLinuxCodexProcesses, runtimeSocketPath
 };
