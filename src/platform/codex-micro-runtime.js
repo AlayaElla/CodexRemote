@@ -1,6 +1,79 @@
 // Runs in the verified Codex main process. Keep this function self-contained:
 // the bridge transports its source once, then reads through a local named pipe.
-function installMicroRuntime({ pipePath, token }, buildProfile) {
+async function readMicroRenderer(profile, loadModule = path => import(path)) {
+  const files = [...new Set([profile.signalsName, ...Object.values(profile).filter(v => v?.file).map(v => v.file)])];
+  const modules = Object.fromEntries(await Promise.all(files.map(async file => [file, await loadModule(`app://-/assets/${file}`)])));
+  const resolve = binding => modules[binding.file][binding.name];
+  const signals = modules[profile.signalsName];
+  signals.r();
+  const root = document.getElementById('root');
+  if (!root) return null;
+  const container = root[Object.keys(root).find(key => key.startsWith('__reactContainer'))];
+  const queue = [container?.stateNode?.current || container], seen = new Set();
+  const stores = new Set();
+  let ownerSnapshot = null, ownerSnapshotSignature = null;
+  while (queue.length && seen.size < 30000) {
+    const fiber = queue.pop();
+    if (!fiber || seen.has(fiber)) continue;
+    seen.add(fiber);
+    for (let hook = fiber.memoizedState, count = 0; hook && count++ < 100; hook = hook.next) {
+      const store = hook.memoizedState?.current;
+      if (!store || typeof store.get !== 'function' || typeof store.watch !== 'function' || store.scope !== resolve(profile.scope)) continue;
+      if (stores.has(store)) continue;
+      stores.add(store);
+      if (store.get(resolve(profile.owner)) !== true) continue;
+      const slots = store.get(signals.n);
+      if (!Array.isArray(slots) || slots.length !== 6) throw new Error('Codex Micro slot schema changed');
+      const assignments = store.get(signals.u) || {};
+      let lighting = null;
+      try {
+        const model = store.get(signals.t);
+        if (model && Number.isFinite(model.brightness) && model.brightness >= 0 && model.brightness <= 1
+          && (model.inactivityTimeoutMs === null || (Number.isInteger(model.inactivityTimeoutMs)
+            && model.inactivityTimeoutMs >= 30000 && model.inactivityTimeoutMs <= 3600000))) {
+          lighting = { brightnessPercent: Math.round(model.brightness * 100), autoDimMs: model.inactivityTimeoutMs,
+            voiceState: model.voiceState };
+        }
+      } catch (_) {}
+      const snapshot = {
+        lighting,
+        threadBindings: (() => {
+          const binding = resolve(profile.bindings);
+          if (profile.bindings.mode === 'family') {
+            return Object.fromEntries(slots.flatMap(slot => {
+              const client = typeof slot.threadKey === 'string'
+                ? slot.threadKey.match(/^local:(client-new-thread:[\w-]{1,128})$/)?.[1] : null;
+              if (!client) return [];
+              const thread = store.get(binding, client);
+              return typeof thread === 'string' && /^[\w-]{1,128}$/.test(thread) ? [[client, thread]] : [];
+            }));
+          }
+          return Object.fromEntries(Object.entries(binding('client-thread-bindings-v1', {}) || {}).filter(([client, thread]) =>
+            /^client-new-thread:[\w-]{1,128}$/.test(client) && typeof thread === 'string' &&
+            /^[\w-]{1,128}$/.test(thread)).slice(-128));
+        })(),
+        source: resolve(profile.sourceGetter)(store.get, resolve(profile.config).agentSource),
+        slots: slots.map(slot => {
+          const key = slot.threadKey;
+          const id = typeof key === 'string' && key.startsWith('local:') ? key.slice(6) : null;
+          const assignment = assignments[`AG${String(slot.id).padStart(2, '0')}`];
+          const hostId = key == null ? null : id == null ? 'cloud' :
+            store.get(resolve(profile.host), id) || (assignment?.threadKey === key ? assignment.hostId : null) || 'local';
+          return { id: slot.id, threadKey: key, hostId, title: slot.title, status: slot.status, selected: slot.selected };
+        })
+      };
+      const signature = JSON.stringify({ source: snapshot.source, slots: snapshot.slots,
+        lighting: snapshot.lighting, threadBindings: snapshot.threadBindings });
+      if (ownerSnapshot && signature !== ownerSnapshotSignature)
+        throw new Error('Conflicting Codex Micro owners were found in one renderer.');
+      if (!ownerSnapshot) { ownerSnapshot = snapshot; ownerSnapshotSignature = signature; }
+    }
+    queue.push(fiber.sibling, fiber.child);
+  }
+  return ownerSnapshot;
+}
+
+function installMicroRuntime({ pipePath, token, readRendererSource }, buildProfile) {
   const requireNative = process.mainModule.require.bind(process.mainModule);
   const { app, BrowserWindow } = requireNative('electron');
   const fs = requireNative('fs');
@@ -14,9 +87,11 @@ function installMicroRuntime({ pipePath, token }, buildProfile) {
   const initialName = moduleText.match(/from"\.\/(app-initial-[\w-]+\.js)"/)?.[1];
   const bridgeName = names.find(name => /^codex-micro-bridge-[\w-]+\.js$/.test(name));
   if (!initialName || !bridgeName) throw new Error('Codex Micro module dependencies are unavailable');
+  const sharedName = moduleText.match(/from["']\.\/(app-shared-[\w-]+\.js)["']/)?.[1];
   const profile = buildProfile({ signalsName, signalsText: moduleText,
     initialText: fs.readFileSync(path.join(assets, initialName), 'utf8'),
-    bridgeText: fs.readFileSync(path.join(assets, bridgeName), 'utf8') });
+    bridgeText: fs.readFileSync(path.join(assets, bridgeName), 'utf8'),
+    sharedText: sharedName ? fs.readFileSync(path.join(assets, sharedName), 'utf8') : undefined });
 
   async function readRenderer(profile) {
     const files = [...new Set([profile.signalsName, ...Object.values(profile).filter(v => v?.file).map(v => v.file)])];
@@ -74,7 +149,8 @@ function installMicroRuntime({ pipePath, token }, buildProfile) {
     return null;
   }
 
-  const rendererCode = `(${readRenderer.toString()})(${JSON.stringify(profile)})`;
+  const renderer = typeof readRendererSource === 'string' ? new Function(`return (${readRendererSource})`)() : readRenderer;
+  const rendererCode = `(${renderer.toString()})(${JSON.stringify(profile)})`;
   let pendingRead = null;
   const read = () => pendingRead ||= (async () => {
     const windows = BrowserWindow.getAllWindows().filter(window => !window.isDestroyed()
@@ -127,4 +203,4 @@ function installMicroRuntime({ pipePath, token }, buildProfile) {
   });
 }
 
-module.exports = { installMicroRuntime };
+module.exports = { installMicroRuntime, readMicroRenderer };

@@ -320,7 +320,12 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (!virtualMicro.configured) {
       voiceVirtualMicroStatus.textContent = '请先保存语音设置。';
     } else if (virtualMicroPttDeliveryState === 'recording') {
-      voiceVirtualMicroStatus.textContent = 'PTT 已按下（录音状态以 Codex 为准）。';
+      voiceVirtualMicroStatus.textContent = virtualMicro.recordingConfirmed
+        ? '正在录制 ESP32 语音。' : 'PTT 已按下（录音状态以 Codex 为准）。';
+    } else if (virtualMicroPttDeliveryState === 'sending') {
+      voiceVirtualMicroStatus.textContent = '已请求发送听写，请查看 Codex 处理结果。';
+    } else if (virtualMicroPttDeliveryState === 'cancelled') {
+      voiceVirtualMicroStatus.textContent = '本次听写已取消。';
     } else if (virtualMicroPttDeliveryState === 'stopped') {
       voiceVirtualMicroStatus.textContent = 'PTT 已松开，请在 Codex 确认并发送。';
     } else if (virtualMicro.connected && virtualMicro.microConnected) {
@@ -706,6 +711,34 @@ document.addEventListener('DOMContentLoaded', () => {
   const metricCodex = document.getElementById('metric-codex-status');
   const metricCodexDebug = document.getElementById('metric-codex-debug');
   const metricCodexDebugDetail = document.getElementById('metric-codex-debug-detail');
+  const codexDebugActions = document.getElementById('codex-debug-actions');
+  const btnLaunchDebug = document.getElementById('btn-launch-debug');
+  const btnRetryDebug = document.getElementById('btn-retry-debug');
+  let codexLaunchUiPending = false;
+  btnLaunchDebug?.addEventListener('click', async () => {
+    if (codexLaunchUiPending) return;
+    codexLaunchUiPending = true;
+    btnLaunchDebug.disabled = true;
+    if (btnRetryDebug) btnRetryDebug.disabled = true;
+    metricCodexDebugDetail.textContent = '正在启动或重启 Codex…';
+    try {
+      const result = await window.electronAPI.launchCodexDebug();
+      metricCodexDebugDetail.textContent = result?.success
+        ? result.restarted ? 'Codex 已重新启动，正在连接…' : 'Codex 正在启动，连接后会自动更新状态。'
+        : result?.error || '启动失败，请重试。';
+    } catch (error) { metricCodexDebugDetail.textContent = error.message; }
+    finally {
+      codexLaunchUiPending = false;
+      btnLaunchDebug.disabled = false;
+      if (btnRetryDebug) btnRetryDebug.disabled = false;
+    }
+  });
+  btnRetryDebug?.addEventListener('click', async () => {
+    btnRetryDebug.disabled = true;
+    try { await window.electronAPI.retryCodexDebug(); }
+    catch (error) { metricCodexDebugDetail.textContent = error.message; }
+    finally { btnRetryDebug.disabled = false; }
+  });
   const metricStt = document.getElementById('metric-stt-status');
   const activityList = document.getElementById('activity-list');
   const activityCount = document.getElementById('activity-count');
@@ -761,10 +794,12 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (voiceStatus.status === 'recording') {
         if (voiceStatus.mode === 'virtual_micro') {
           virtualMicroPttDeliveryState = 'recording';
-          if (voiceVirtualMicroStatus) voiceVirtualMicroStatus.textContent = 'PTT 已按下（录音状态以 Codex 为准）。';
+          virtualMicroReadiness = { ...virtualMicroReadiness, recordingConfirmed: voiceStatus.recordingConfirmed === true };
+          if (voiceVirtualMicroStatus) voiceVirtualMicroStatus.textContent = voiceStatus.recordingConfirmed
+            ? '正在录制 ESP32 语音。' : 'PTT 已按下（录音状态以 Codex 为准）。';
         }
         if (labVoiceStatus) labVoiceStatus.textContent = voiceStatus.mode === 'virtual_micro'
-          ? 'PTT 已按下（录音状态以 Codex 为准）'
+          ? voiceStatus.recordingConfirmed ? '正在录制 ESP32 语音' : 'PTT 已按下（录音状态以 Codex 为准）'
           : `${modeLabel} 录音中`;
       } else if (voiceStatus.status === 'submitting') {
         if (labVoiceStatus) labVoiceStatus.textContent = `${modeLabel} 正在提交`;
@@ -775,11 +810,13 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (voiceStatus.status === 'stopped') {
         if (voiceStatus.mode === 'virtual_micro') {
           virtualMicroPttActive = false;
-          virtualMicroPttDeliveryState = 'stopped';
+          virtualMicroPttDeliveryState = voiceStatus.cancelled ? 'cancelled' : voiceStatus.submissionRequested ? 'sending' : 'stopped';
           if (btnTestVirtualMicroPtt) btnTestVirtualMicroPtt.textContent = '按住说话';
-          if (voiceVirtualMicroStatus) voiceVirtualMicroStatus.textContent = 'PTT 已松开，请在 Codex 确认并发送。';
+          updateVirtualMicroStatus();
         }
-        if (labVoiceStatus) labVoiceStatus.textContent = '录音已停止，请在 Codex 确认并发送';
+        if (labVoiceStatus) labVoiceStatus.textContent = voiceStatus.cancelled ? '本次听写已取消'
+          : voiceStatus.submissionRequested ? '已请求发送听写，请查看 Codex 处理结果'
+          : voiceStatus.message || '录音已停止，请在 Codex 确认并发送';
       } else if (voiceStatus.status === 'idle') {
         if (labVoiceStatus) labVoiceStatus.textContent = '等待语音输入';
       } else if (voiceStatus.status === 'error') {
@@ -935,17 +972,20 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!metricCodexDebug || !metricCodexDebugDetail) return;
     metricCodexDebug.hidden = !debug;
     metricCodexDebugDetail.hidden = !debug;
+    if (codexDebugActions) codexDebugActions.hidden = !debug;
     if (!debug) return;
     const states = {
       waiting: { icon: 'schedule', label: '调试：等待 Codex', tone: 'neutral' },
       locating: { icon: 'progress_activity', label: '调试：正在检测', tone: 'neutral' },
       activating: { icon: 'progress_activity', label: '调试：正在开启', tone: 'neutral' },
+      restarting: { icon: 'progress_activity', label: 'Codex：正在启动或重启', tone: 'neutral' },
       checking: { icon: 'progress_activity', label: '调试：正在验证', tone: 'neutral' },
       ready: { icon: 'check_circle', label: '调试：已开启', tone: 'success' },
+      setup: { icon: 'info', label: '调试：需要重新启动', tone: 'warning' },
       error: { icon: 'error', label: '调试：开启失败', tone: 'warning' }
     };
     setMetricState(metricCodexDebug, states[debug.stage] || states.waiting);
-    metricCodexDebugDetail.textContent = debug.message || '';
+    if (!codexLaunchUiPending) metricCodexDebugDetail.textContent = debug.message || '';
   }
 
   function setMetricState(element, { icon, label, tone }) {

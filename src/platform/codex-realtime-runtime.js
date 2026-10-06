@@ -7,6 +7,7 @@ const findRealtimeControls = require('./codex-realtime-controls');
 const installRealtimeRuntime = require('./codex-native-voice-host');
 const buildNativeVoiceProfile = require('./codex-native-voice-profile');
 const { nativeVoiceRenderer, startNativeVoice } = require('./codex-native-voice');
+const CodexRendererRealtime = require('./codex-renderer-realtime');
 
 // This adapter resolves only inspected native voice bindings. A changed
 // renderer fails closed when those bindings cannot be confirmed.
@@ -77,23 +78,39 @@ class CodexRealtimeRuntime extends EventEmitter {
   constructor(options = {}) {
     super(); this.platform = options.platform || process.platform; this.findProcess = options.findProcess || (() => findCodexProcess({ platform: this.platform }));
     this.connectInspector = options.connectInspector || connectInspector; this.readPipe = options.readPipe || readPipe; this.requestImpl = options.request || null;
+    this.rendererFactory = Object.prototype.hasOwnProperty.call(options, 'rendererFactory') ? options.rendererFactory :
+      Object.prototype.hasOwnProperty.call(options, 'connectInspector') ? null : (() => new CodexRendererRealtime());
+    this.renderer = null; this.generation = 0;
     this.getContext = options.getContext || (() => null); this.activateTask = options.activateTask || (async () => {}); this.pipePath = null; this.token = null; this.owner = null; this.ownerContext = null; this.connecting = null; this.queue = Promise.resolve(); this.lastState = null; this.pollTimer = null; this.voiceSessionId = null; this.voiceConversationId = null;
   }
   on(...args) { return super.on(...args); }
   enqueue(task) { const next = this.queue.catch(() => {}).then(task); this.queue = next; return next; }
   async ensure() {
     if (this.platform !== 'win32') throw new Error('Codex realtime runtime currently supports Windows only.');
-    if (this.pipePath) return; if (this.connecting) return this.connecting;
+    if (this.pipePath || this.renderer) return; if (this.connecting) return this.connecting;
+    const generation = this.generation;
     this.connecting = (async () => {
       const target = await this.findProcess(); let inspector;
       try {
         try { inspector = await this.connectInspector(); }
-        catch (_) { throw new Error(require('./codex-inspector-policy').WINDOWS_INSPECTOR_REQUIRED); }
+        catch (error) {
+          if (!this.rendererFactory) throw new Error(require('./codex-inspector-policy').WINDOWS_INSPECTOR_REQUIRED);
+          const renderer = this.rendererFactory();
+          try {
+            await renderer.connect(target);
+            if (generation !== this.generation) { await renderer.dispose(); throw new Error('Codex realtime connection was cancelled.'); }
+            this.renderer = renderer; this.owner = target; return;
+          } catch (rendererError) {
+            try { await renderer.dispose(); } catch (_) {}
+            throw rendererError;
+          }
+        }
         if (!inspector) throw new Error('Unable to establish the Codex desktop runtime.');
         const identity = await inspector.evaluate('({pid:process.pid,executable:process.execPath})');
         if (identity?.pid !== target.pid || String(identity.executable || '').toLowerCase() !== String(target.executable || '').toLowerCase()) throw new Error('Codex process identity mismatch.');
         const pipePath = runtimeSocketPath('win32', target.pid, randomUUID()); const token = randomBytes(32).toString('hex');
         await inspector.evaluate(`(${installRealtimeRuntime.toString()})(${JSON.stringify({ pipePath, token, controlLocatorSource: findRealtimeControls.toString(), rendererSource: nativeVoiceRenderer.toString(), coordinatorSource: startNativeVoice.toString() })}, (${buildNativeVoiceProfile.toString()}))`);
+        if (generation !== this.generation) throw new Error('Codex realtime connection was cancelled.');
         this.pipePath = pipePath; this.token = token; this.owner = target;
       } finally { inspector?.close(); }
     })().finally(() => { this.connecting = null; });
@@ -103,7 +120,9 @@ class CodexRealtimeRuntime extends EventEmitter {
     try {
       const request = payload.target ? payload : { ...payload, target: this.ownerContext };
       if (this.requestImpl) { const result = await this.requestImpl(type, request); this.note(result); return result; }
-      await this.ensure(); const result = await this.readPipe(this.pipePath, this.token, type, request); this.note(result); return result;
+      await this.ensure();
+      const result = this.renderer ? await this.renderer.request(type, request) : await this.readPipe(this.pipePath, this.token, type, request);
+      this.note(result); return result;
     } catch (error) { throw error; }
   }
   note(snapshot) {
@@ -152,20 +171,20 @@ class CodexRealtimeRuntime extends EventEmitter {
   async stop(context) {
     return this.enqueue(async () => {
       clearInterval(this.pollTimer); this.pollTimer = null;
-      if (!this.voiceSessionId) { this.dispose(); return; }
+      if (!this.voiceSessionId) { await this.dispose(); return; }
       const state = await this.request('read');
       if (state.active) {
         if (!this.owns(state)) throw new Error('Refusing to end a different Codex voice session.');
         await this.request('stop', { voiceSessionId: this.voiceSessionId });
       }
-      this.dispose();
+      await this.dispose();
     });
   }
   async setMuted(muted) { return this.enqueue(async () => { if (typeof muted !== 'boolean') throw new Error('Invalid microphone mute state.'); const before = await this.request('read'); if (!this.owns(before)) throw new Error('Refusing to mute a different Codex voice session.'); const state = await this.request('mute', { muted }); if (!this.owns(state) || state.microphoneMuted !== muted) throw new Error('Codex did not confirm microphone mute state.'); return state; }); }
   async interrupt() { throw new Error('The current Codex renderer exposes no verified native assistant-interrupt control.'); }
   async diagnoseWindows() { return this.enqueue(() => this.request('diagnose', { target: null })); }
   async readState(context) { return this.enqueue(() => this.request('read', context ? { target: context } : {})); }
-  dispose() { clearInterval(this.pollTimer); this.pollTimer = null; const pipePath = this.pipePath, token = this.token; this.pipePath = null; this.token = null; this.owner = null; this.lastState = null; this.lastTranscript = null; this.ownerContext = null; this.voiceSessionId = null; this.voiceConversationId = null; if (pipePath) void this.readPipe(pipePath, token, 'close').catch(() => {}); }
+  dispose() { this.generation++; clearInterval(this.pollTimer); this.pollTimer = null; const pipePath = this.pipePath, token = this.token, renderer = this.renderer; this.pipePath = null; this.token = null; this.renderer = null; this.owner = null; this.lastState = null; this.lastTranscript = null; this.ownerContext = null; this.voiceSessionId = null; this.voiceConversationId = null; if (pipePath) void this.readPipe(pipePath, token, 'close').catch(() => {}); return renderer ? Promise.resolve().then(() => renderer.dispose()).catch(() => {}) : Promise.resolve(); }
 }
 
 module.exports = CodexRealtimeRuntime;

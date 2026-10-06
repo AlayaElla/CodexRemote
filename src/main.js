@@ -4,13 +4,15 @@ const WsServer = require('./transports/ws-server');
 const { DiscoveryServer, getLanAddresses } = require('./transports/discovery-server');
 const AgentBridge = require('./core/agent-bridge');
 const { CodexDesktopState } = require('./core/codex-desktop-state');
-const { CodexMicroSlots } = require('./core/codex-micro-slots');
+const { CodexMicroSlots, findCodexProcess } = require('./core/codex-micro-slots');
 const { controlDelivered } = require('./voice/control-delivery');
 const { CodexControls, commandKey } = require('./core/codex-controls');
 const { TargetedTextRequests } = require('./core/codex-targeted-text');
 const { CodexSubmissionFollow } = require('./core/codex-submission-follow');
 const CodexShortcuts = require('./platform/codex-shortcuts');
 const CodexDebugActivation = require('./platform/codex-debug-activation');
+const { setRendererConnectionProvider } = require('./platform/codex-renderer-connection');
+const { launchCodexForDebug } = require('./platform/codex-debug-launch');
 const CodexConversationStore = require('./core/codex-conversation-store');
 const { CodexMedia } = require('./core/codex-media');
 const CodexMediaTransfer = require('./core/codex-media-transfer');
@@ -122,8 +124,14 @@ class CodexRemoteApp {
     this.setupIpc();
     this.codexDebug = new CodexDebugActivation({
       statusFile: path.join(app.getPath('userData'), 'codex-debug-status.json'),
-      onProgress: () => this.broadcastStatus()
+      onProgress: status => {
+        if (['error', 'setup', 'ready'].includes(status.stage)) {
+          this.addLog('Codex Debug', status.stage === 'ready' ? 'info' : 'warning', status.message);
+        }
+        this.broadcastStatus();
+      }
     });
+    setRendererConnectionProvider(target => this.codexDebug.getRendererConnection(target));
     this.codexDebug.start();
     await this.startServices(this.serviceConfig);
     // Do not make window startup wait for the broker handshake (which can take
@@ -860,6 +868,30 @@ class CodexRemoteApp {
   }
 
   setupIpc() {
+    ipcMain.handle('retry-codex-debug', event => {
+      if (!this.isAuthorizedMainFrame(event)) return { success: false, error: '无效的连接请求。' };
+      return this.codexDebug?.retry() || { success: false, error: '连接服务尚未启动。' };
+    });
+    ipcMain.handle('launch-codex-debug', async event => {
+      if (!this.isAuthorizedMainFrame(event)) return { success: false };
+      if (!this.codexLaunchPending) {
+        this.codexLaunchPending = this.runVoiceTransition(async () => {
+          await this.releaseActiveVoice('Codex restart');
+          this.codexDebug?.stop();
+          this.codexDebug?.progress('restarting', '正在启动或重启 Codex…');
+          try { return await launchCodexForDebug(); }
+          finally { this.codexDebug?.start(); }
+        }).then(result => {
+          void this.codexDebug?.retry();
+          return { ...result, success: true };
+        }).catch(error => {
+          this.codexDebug?.progress('error', error.message);
+          return { success: false, error: error.message };
+        })
+          .finally(() => { this.codexLaunchPending = null; });
+      }
+      return this.codexLaunchPending;
+    });
     ipcMain.handle('get-status', () => {
       return { ...this.getStatus(), logs: this.logs };
     });
@@ -1317,7 +1349,6 @@ if (!hasSingleInstanceLock) {
       event.preventDefault();
       if (!appInstance.quitCleanupPromise) {
         appInstance.isQuitting = true;
-        appInstance.codexDebug?.stop();
         const cleanup = async () => {
           await appInstance.stopServices();
           if (appInstance.voiceRecognizer && typeof appInstance.voiceRecognizer.dispose === 'function') {
@@ -1326,6 +1357,8 @@ if (!hasSingleInstanceLock) {
         };
         const timeout = new Promise((resolve) => setTimeout(resolve, 2000));
         appInstance.quitCleanupPromise = Promise.race([cleanup(), timeout]).catch(() => {}).finally(() => {
+          appInstance.codexDebug?.stop();
+          setRendererConnectionProvider(null);
           appInstance.quitCleanupComplete = true;
           app.quit();
         });

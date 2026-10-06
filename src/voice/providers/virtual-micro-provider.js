@@ -52,6 +52,12 @@ class VirtualMicroProvider extends VoiceProvider {
     this.audioPreparationGeneration = 0;
     this.audioCleanupPending = 0;
     this.audioPreparationError = null;
+    this.nativeDictationFactory = options.nativeDictationFactory || null;
+    this.nativeDictation = null;
+    this.nativeDictationSupported = false;
+    this.nativeSessionOwned = false;
+    this.nativeCleanupPending = null;
+    this.recordingConfirmed = false;
     this.disposed = false;
     this.onControllerStatus = () => this.emit('status', this.getStatus());
     this.onControllerFault = (error) => {
@@ -59,6 +65,7 @@ class VirtualMicroProvider extends VoiceProvider {
       this.releaseUncertain = this.releaseUncertain || this.active || this.pressPending;
       this.active = false;
       this.cancelAudioImmediately();
+      this.cleanupNativeDictation().catch(() => {});
       this.emit('fault', { message: this.lastError, status: this.getStatus() });
     };
     if (this.controller && typeof this.controller.on === 'function') {
@@ -97,7 +104,9 @@ class VirtualMicroProvider extends VoiceProvider {
       this.releaseUncertain = this.releaseUncertain || pttMayBePressed;
       this.cancelAudioImmediately();
       if (pttMayBePressed && this.controller && typeof this.controller.releaseAll === 'function') {
-        Promise.resolve(this.controller.releaseAll()).catch(() => {});
+        this.cleanupNativeDictation().catch(() => {}).then(() => this.controller.releaseAll()).catch(() => {});
+      } else {
+        this.cleanupNativeDictation().catch(() => {});
       }
       this.emit('fault', { message: this.lastError, status: this.getStatus() });
     };
@@ -139,6 +148,24 @@ class VirtualMicroProvider extends VoiceProvider {
     this.audioCleanupPending += 1;
     try { await this.audioBridge.cancel(); } catch (error) {}
     finally { this.audioCleanupPending -= 1; }
+  }
+
+  async cleanupNativeDictation({ cancel = true } = {}) {
+    const native = this.nativeDictation;
+    if (!native) return this.nativeCleanupPending;
+    this.nativeDictation = null;
+    this.nativeDictationSupported = false;
+    this.recordingConfirmed = false;
+    const cleanup = (async () => {
+      try {
+        if (cancel && typeof native.cancel === 'function') await native.cancel();
+      } finally {
+        await native.dispose?.({ cancel: false });
+      }
+    })();
+    this.nativeCleanupPending = cleanup;
+    try { return await cleanup; }
+    finally { if (this.nativeCleanupPending === cleanup) this.nativeCleanupPending = null; }
   }
 
   maintainAudioPreparation() {
@@ -226,6 +253,8 @@ class VirtualMicroProvider extends VoiceProvider {
       acceptsAudio: this.config.audioSource === 'esp32',
       profile: status.profile || this.config.profile,
       audioSource: this.config.audioSource,
+      recordingConfirmed: this.recordingConfirmed,
+      nativeDictation: this.nativeDictationSupported,
       audioBridge: this.bridgeStatus(),
       lastError: this.lastError || status.lastError || null,
       releaseUncertain: this.releaseUncertain
@@ -255,11 +284,16 @@ class VirtualMicroProvider extends VoiceProvider {
   }
 
   async start(options = {}) {
+    const checkCancelled = () => {
+      if (options.signal?.aborted) throw Object.assign(new Error('本次语音输入已取消。'), { code: 'VOICE_INPUT_CANCELLED' });
+    };
+    checkCancelled();
     if (this.active) throw new Error('Virtual Micro push-to-talk is already active.');
     if (this.releaseUncertain) {
       throw new Error('Virtual Micro release state is uncertain; reconnect the HID controller before starting again.');
     }
     const startupTiming = {};
+    const startStartedAt = performance.now();
     let stepStartedAt = performance.now();
     await this.connect();
     startupTiming.connectMs = Math.round(performance.now() - stepStartedAt);
@@ -271,10 +305,37 @@ class VirtualMicroProvider extends VoiceProvider {
       if (bridge && typeof bridge.start !== 'function') throw new Error('ESP32 audio bridge start operation is unavailable.');
       stepStartedAt = performance.now();
       if (bridge) await bridge.start(this.config.audioDeviceId);
+      checkCancelled();
       startupTiming.audioMs = Math.round(performance.now() - stepStartedAt);
       stepStartedAt = performance.now();
       if (options.beforePttPress) await options.beforePttPress();
       startupTiming.targetMs = Math.round(performance.now() - stepStartedAt);
+      if (bridge && this.nativeDictationFactory) {
+        const inputCaptureName = String(bridge.getStatus?.().captureName || '').trim();
+        if (!inputCaptureName) throw new Error('ESP32 虚拟麦克风采集端未就绪。');
+        const native = this.nativeDictationFactory();
+        if (!native || typeof native.prepare !== 'function') throw new Error('Codex 听写连接不可用。');
+        this.nativeDictation = native;
+        this.nativeSessionOwned = true;
+        stepStartedAt = performance.now();
+        const prepared = await native.prepare({
+          target: options.submissionContext,
+          requestId: options.requestId,
+          signal: options.signal,
+          inputCaptureName
+        });
+        startupTiming.nativePrepareMs = Math.round(performance.now() - stepStartedAt);
+        if (this.nativeDictation !== native) throw new Error('本次听写连接已取消。');
+        if (typeof prepared?.supported !== 'boolean') throw new Error('Codex 听写兼容状态未确认。');
+        this.nativeDictationSupported = prepared?.supported === true;
+        if (!this.nativeDictationSupported) {
+          await this.cleanupNativeDictation({ cancel: false });
+          this.nativeSessionOwned = false;
+        }
+        // Selection can change while the renderer resolves its input device.
+        if (options.beforePttPress) await options.beforePttPress();
+      }
+      checkCancelled();
       this.pressPending = true;
       stepStartedAt = performance.now();
       const result = await this.controller.setPtt(true);
@@ -285,13 +346,25 @@ class VirtualMicroProvider extends VoiceProvider {
       if (this.releaseUncertain) {
         throw new Error('Virtual Micro audio fault occurred while the HID PTT press was pending.');
       }
+      if (this.nativeDictationSupported) {
+        const native = this.nativeDictation;
+        stepStartedAt = performance.now();
+        const begun = await native.begun();
+        startupTiming.confirmationMs = Math.round(performance.now() - stepStartedAt);
+        if (this.nativeDictation !== native || this.releaseUncertain) throw new Error('听写连接在开始录音时中断。');
+        if (begun?.recordingConfirmed !== true) throw new Error('Codex 未确认从 ESP32 音源开始录音。');
+        this.recordingConfirmed = true;
+      }
+      if (this.nativeSessionOwned) checkCancelled();
       this.active = true;
+      startupTiming.totalMs = Math.round(performance.now() - startStartedAt);
       return { ...this.getStatus(), delivery: result.delivery, outcome: result.outcome || 'unknown', startupTiming };
     } catch (error) {
       const inputCancelled = error?.code === 'VOICE_INPUT_CANCELLED';
       this.lastError = inputCancelled ? null : error && error.message ? error.message : String(error);
       const pttMayBePressed = this.active || this.pressPending;
       this.releaseUncertain = this.releaseUncertain || pttMayBePressed;
+      try { await this.cleanupNativeDictation(); } catch (_) {}
       if (inputCancelled && !pttMayBePressed && this.audioBridge?.discard) {
         try { await this.audioBridge.discard(); }
         catch (_) { await this.cancelAudioImmediately(); }
@@ -301,12 +374,14 @@ class VirtualMicroProvider extends VoiceProvider {
       if (pttMayBePressed) {
         try { await this.releaseAll(); } catch (releaseError) {}
       }
+      this.nativeSessionOwned = false;
       throw error;
     } finally { this.pressPending = false; }
   }
 
   async stop(options = {}) {
     if (!this.active) throw new Error('Virtual Micro push-to-talk is not active.');
+    const native = this.nativeDictationSupported ? this.nativeDictation : null;
     let submissionKey = options && options.submissionKey;
     let beforePttRelease = options && options.beforePttRelease;
     if (submissionKey !== undefined && (typeof submissionKey !== 'string' || !submissionKey)) {
@@ -327,13 +402,22 @@ class VirtualMicroProvider extends VoiceProvider {
         submissionKey = fresh?.submissionKey;
         beforePttRelease = fresh?.beforePttRelease;
         if (submissionKey && beforePttRelease) throw new Error('语音发送路径冲突。');
-        if (!submissionKey && !beforePttRelease) throw new Error('语音发送操作不可用。');
+        if (!submissionKey && !beforePttRelease && !this.nativeDictationSupported) throw new Error('语音发送操作不可用。');
+      }
+      if (!this.active || this.releaseUncertain || (native && this.nativeDictation !== native)) {
+        throw new Error('听写连接已中断，已取消本次语音发送。');
       }
       let submission = null;
       // Codex's composer.submit changes an in-progress dictation to
       // stopDictation('send'). It must therefore arrive before ACT10 is
       // released; after that release the client uses the insert action.
-      if (beforePttRelease) {
+      if (native) {
+        submission = await native.submit();
+        if (!controlDelivered(submission) || submission.recordingStopped !== true) {
+          throw new Error(submission?.error || 'Codex 未确认结束并发送听写。');
+        }
+        submissionKey = null;
+      } else if (beforePttRelease) {
         submission = await beforePttRelease();
         if (!submission || submission.success === false || !submission.delivery || submission.delivery === 'not_sent') {
           throw new Error((submission && submission.error) || 'Native dictation submission was not acknowledged.');
@@ -355,6 +439,8 @@ class VirtualMicroProvider extends VoiceProvider {
         throw new Error((result && result.error) || 'Virtual Micro HID PTT release was not acknowledged.');
       }
       this.active = false;
+      await this.cleanupNativeDictation({ cancel: false });
+      this.nativeSessionOwned = false;
       this.lastError = null;
       this.prepareAudioInBackground();
       return {
@@ -383,9 +469,16 @@ class VirtualMicroProvider extends VoiceProvider {
     if (!this.controller || typeof this.controller.releaseAll !== 'function') {
       throw new Error('Virtual Micro controller emergency release is unavailable.');
     }
+    let nativeError;
+    try { await this.cleanupNativeDictation(); } catch (error) { nativeError = error; }
+    let releaseConfirmed = false;
     try {
       const result = await this.controller.releaseAll();
+      releaseConfirmed = controlDelivered(result);
+      if (releaseConfirmed) this.releaseUncertain = false;
       this.active = false;
+      this.nativeSessionOwned = false;
+      if (nativeError) throw nativeError;
       return {
         ...this.getStatus(),
         delivery: result && result.delivery || 'not_sent',
@@ -393,7 +486,7 @@ class VirtualMicroProvider extends VoiceProvider {
       };
     } catch (error) {
       this.active = false;
-      this.releaseUncertain = true;
+      if (!releaseConfirmed) this.releaseUncertain = true;
       this.lastError = error && error.message ? error.message : String(error);
       throw error;
     }
@@ -418,7 +511,12 @@ class VirtualMicroProvider extends VoiceProvider {
     let release;
     let discarded = false;
     try {
-      if (options.beforePttRelease && (this.active || this.pressPending)) {
+      if (this.nativeSessionOwned) {
+        const native = this.nativeDictation;
+        const result = native ? await native.cancel() : await this.nativeCleanupPending;
+        discarded = Boolean(result?.discarded || result?.cancelled || result?.success);
+        await this.cleanupNativeDictation({ cancel: false });
+      } else if (options.beforePttRelease && (this.active || this.pressPending)) {
         const result = await options.beforePttRelease();
         if (!result || result.success !== true || !['discarded_in_native_app', 'submitted_to_keyboard'].includes(result.delivery)) {
           throw new Error('Codex 未确认丢弃听写。');

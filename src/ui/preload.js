@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   simulateDeviceMsg: (message) => ipcRenderer.invoke('simulate-device-msg', message),
   sendDeviceMsg: (message) => ipcRenderer.invoke('send-device-msg', message),
   getStatus: () => ipcRenderer.invoke('get-status'),
+  retryCodexDebug: () => ipcRenderer.invoke('retry-codex-debug'),
+  launchCodexDebug: () => ipcRenderer.invoke('launch-codex-debug'),
   getServiceConfig: () => ipcRenderer.invoke('get-service-config'),
   getVoiceConfig: () => ipcRenderer.invoke('get-voice-config'),
   saveVoiceConfig: (config) => ipcRenderer.invoke('save-voice-config', config),

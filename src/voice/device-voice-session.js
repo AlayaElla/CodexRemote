@@ -78,11 +78,11 @@ class DeviceVoiceSession {
   }
 
   handle(message) {
-    const pending = message.type === 'voice_start' ? { cancelled: false } : null;
+    const pending = message.type === 'voice_start' ? { cancelled: false, abortController: new AbortController() } : null;
     if (pending && message.requestId) this.pendingStarts.set(message.requestId, pending);
     if (message.type === 'voice_end' && message.cancelled === true && message.requestId) {
       const starting = this.pendingStarts.get(message.requestId);
-      if (starting) starting.cancelled = true;
+      if (starting) { starting.cancelled = true; starting.abortController?.abort(); }
       if ((starting && !this.activeRequestId) || message.requestId === this.activeRequestId) {
         this.audioOverflowed = true;
         this.discardQueuedAudio();
@@ -146,7 +146,7 @@ class DeviceVoiceSession {
   }
 
   cancelVirtualMicro(reason = 'Voice session cancelled.') {
-    for (const pending of this.pendingStarts.values()) pending.cancelled = true;
+    for (const pending of this.pendingStarts.values()) { pending.cancelled = true; pending.abortController?.abort(); }
     this.audioOverflowed = true;
     this.discardQueuedAudio();
     const next = this.operation.catch(() => {}).then(async () => {
@@ -257,9 +257,14 @@ class DeviceVoiceSession {
           throw new Error('Codex Micro submission context is unavailable.');
         }
         checkCancelled();
-        const result = await this.voiceRecognizer.start({ beforePttPress: async () => {
+        let targetPrepared = false;
+        const result = await this.voiceRecognizer.start({ submissionContext, requestId: message.requestId,
+          signal: pending.abortController?.signal, beforePttPress: async () => {
           checkCancelled();
-          await this.prepareSubmissionTarget(submissionContext);
+          if (!targetPrepared) {
+            await this.prepareSubmissionTarget(submissionContext);
+            targetPrepared = true;
+          }
           checkCancelled();
           if (!sameSubmissionTarget(submissionContext, await this.getSubmissionContext(message))) {
             throw new Error('任务已变化，请重新按住说话。');
@@ -283,13 +288,15 @@ class DeviceVoiceSession {
           mode,
           delivery: result.delivery,
           outcome: result.outcome || 'unknown',
-          recordingConfirmed: false,
+          recordingConfirmed: result.recordingConfirmed === true,
           audioSource: result.audioSource || (this.voiceRecognizer.getStatus && this.voiceRecognizer.getStatus().audioSource) || 'computer',
           acceptsAudio: Boolean(result.acceptsAudio || (this.voiceRecognizer.getStatus && this.voiceRecognizer.getStatus().acceptsAudio))
         });
-        this.onLog('info', `${mode} PTT press was delivered; Codex recording state is unconfirmed.`);
+        this.onLog('info', result.recordingConfirmed === true
+          ? 'Codex 已确认使用 ESP32 音源录音。'
+          : `${mode} PTT press was delivered; Codex recording state is unconfirmed.`);
         if (result.startupTiming) this.onLog('info', `Voice start timing (ms): ${JSON.stringify(result.startupTiming)}`);
-        return { success: true, state: 'recording', mode, recordingConfirmed: false };
+        return { success: true, state: 'recording', mode, recordingConfirmed: result.recordingConfirmed === true };
       }
       const submissionContext = await this.getSubmissionContext(message);
       checkCancelled();
@@ -343,7 +350,9 @@ class DeviceVoiceSession {
     if (!status.acceptsAudio) return { success: true, ignored: true };
     try {
       if (message.chunk) await this.voiceRecognizer.appendAudio(message.chunk);
+      const firstAudio = this.activeAudioBytes === 0 && audioByteLength(message.chunk) > 0;
       this.activeAudioBytes += audioByteLength(message.chunk);
+      if (firstAudio) this.onLog('info', '已收到 ESP32 音频数据。');
       return { success: true, state: 'recording', mode: this.activeMode };
     } catch (error) {
       return this.fail(error, message.requestId);
@@ -354,10 +363,11 @@ class DeviceVoiceSession {
     if (!context || typeof context !== 'object') throw new Error('Codex Micro submission context is unavailable.');
     const state = String(context && (context.executionState || context.state) || '').trim().toLowerCase();
     const isExecuting = ['active', 'running', 'working'].includes(state);
-    const layout = await this.getMicroLayout();
-    const key = commandKey(layout, 'composer.submit');
-    if (!key) throw new Error('请在 Codex Micro 中绑定发送命令（CODEX）。');
-    return { key, submission: isExecuting ? normalizeFollowUpQueueMode(context.followUpQueueMode) : 'send',
+    const nativeDictation = this.voiceRecognizer?.getStatus?.().nativeDictation === true;
+    const layout = nativeDictation ? null : await this.getMicroLayout();
+    const key = nativeDictation ? null : commandKey(layout, 'composer.submit');
+    if (!key && !nativeDictation) throw new Error('请在 Codex Micro 中绑定发送命令（CODEX）。');
+    return { key, ...(nativeDictation ? { nativeDictation: true } : {}), submission: isExecuting ? normalizeFollowUpQueueMode(context.followUpQueueMode) : 'send',
       taskId: context.taskId || null, executionState: state,
       followUpQueueMode: normalizeFollowUpQueueMode(context.followUpQueueMode) };
   }
@@ -412,7 +422,9 @@ class DeviceVoiceSession {
         }
 
         if (this.activeRequiresDeviceAudio && this.activeAudioBytes === 0) {
-          const result = await this.voiceRecognizer.stop();
+          const noAudioMessage = '未收到 ESP32 音频数据，已取消本次空听写。';
+          this.onLog('warning', noAudioMessage);
+          const result = await this.cancelCurrentInput();
           this.activeMode = null;
           this.activeRequestId = null;
           this.audioOverflowed = true;
@@ -428,7 +440,7 @@ class DeviceVoiceSession {
             submissionRequested: false,
             submissionConfirmed: false,
             recordingConfirmed: false,
-            message: 'Automatic submission was skipped because no device audio was received.'
+            message: noAudioMessage
           });
           return { success: false, mode, error: 'No device audio was received.', submissionRequested: false };
         }
@@ -441,9 +453,8 @@ class DeviceVoiceSession {
           }
           submission = await this.resolveMicroSubmission(currentContext);
         } catch (error) {
-          // A missing or unreadable layout must never lead to a hard-coded
-          // ACT12 send. Release the current capture without submitting it.
-          const result = await this.voiceRecognizer.stop();
+          // Cancel the owned capture when the task or sending layout changed.
+          const result = await this.cancelCurrentInput();
           this.activeMode = null;
           this.activeRequestId = null;
           this.audioOverflowed = true;
@@ -485,6 +496,7 @@ class DeviceVoiceSession {
             await this.assertSubmissionTarget(this.activeSubmissionContext);
             return {
               submissionKey: submission.key || undefined,
+              ...(submission.nativeDictation ? { nativeDictation: true } : {}),
             };
           },
           ...(submission.key ? { submissionKey: submission.key } : {})

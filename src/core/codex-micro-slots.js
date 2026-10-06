@@ -5,7 +5,8 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { randomBytes, randomUUID } = require('node:crypto');
 const WebSocket = require('ws');
-const { installMicroRuntime } = require('../platform/codex-micro-runtime');
+const { installMicroRuntime, readMicroRenderer } = require('../platform/codex-micro-runtime');
+const { CodexRendererMicro } = require('../platform/codex-renderer-micro');
 const { buildMicroReadProfile } = require('../platform/codex-micro-read-profile');
 const { macRuntimeExpression } = require('../platform/macos-runtime');
 
@@ -162,6 +163,9 @@ class CodexMicroSlots {
     this.findProcess = options.findProcess || (() => findCodexProcess({ platform: this.platform }));
     this.connectInspector = options.connectInspector || connectInspector;
     this.readPipe = options.readPipe || readPipe;
+    this.rendererFactory = options.rendererFactory || (() => new CodexRendererMicro({ platform: this.platform }));
+    this.rendererFallbackEnabled = this.platform === 'win32' && (Boolean(options.rendererFactory) || !options.connectInspector);
+    this.rendererAdapter = null;
     this.activate = options.activate || (pid => process._debugProcess(pid));
     this.pipePath = null; this.token = null; this.connecting = null; this.generation = 0;
     this.nextAttemptAt = 0;
@@ -169,8 +173,9 @@ class CodexMicroSlots {
   async read() {
     if (Date.now() < this.nextAttemptAt) throw new Error('正在重新连接 Codex Micro');
     try {
-      if (!this.pipePath) await this._connect();
-      return normalizeMicroSnapshot(await this.readPipe(this.pipePath, this.token));
+      if (!this.pipePath && !this.rendererAdapter) await this._connect();
+      const snapshot = this.rendererAdapter ? await this.rendererAdapter.read() : await this.readPipe(this.pipePath, this.token);
+      return normalizeMicroSnapshot(snapshot);
     }
     catch (error) { this.stop(); this.nextAttemptAt = Date.now() + 5000; throw error; }
   }
@@ -193,6 +198,13 @@ class CodexMicroSlots {
     try {
       try { inspector = await this.connectInspector(); } catch (_) {
         if (this.platform === 'win32') {
+          if (this.rendererFallbackEnabled) {
+            const adapter = this.rendererFactory();
+            await adapter.connect(target);
+            if (generation !== this.generation) { await adapter.stop(); throw new Error('Codex Micro 同步已取消'); }
+            this.rendererAdapter = adapter;
+            return;
+          }
           throw new Error(require('../platform/codex-inspector-policy').WINDOWS_INSPECTOR_REQUIRED);
         }
         this.activate(target.pid); activated = true;
@@ -211,7 +223,7 @@ class CodexMicroSlots {
       const pipePath = runtimeSocketPath(this.platform, target.pid);
       const token = randomBytes(32).toString('hex');
       await inspector.evaluate(this.platform === 'darwin' ? macRuntimeExpression({ pipePath, token })
-        : `(${installMicroRuntime.toString()})(${JSON.stringify({ pipePath, token })},${buildMicroReadProfile.toString()})`);
+        : `(${installMicroRuntime.toString()})(${JSON.stringify({ pipePath, token, readRendererSource: readMicroRenderer.toString() })},${buildMicroReadProfile.toString()})`);
       if (generation !== this.generation) { void this.readPipe(pipePath, token, 'close').catch(() => {}); throw new Error('Codex Micro 同步已取消'); }
       this.pipePath = pipePath; this.token = token;
     } finally {
@@ -224,6 +236,8 @@ class CodexMicroSlots {
     this.generation += 1;
     this.nextAttemptAt = 0;
     if (this.pipePath) void this.readPipe(this.pipePath, this.token, 'close').catch(() => {});
+    if (this.rendererAdapter) void Promise.resolve(this.rendererAdapter.stop()).catch(() => {});
+    this.rendererAdapter = null;
     this.pipePath = null; this.token = null; this.connecting = null;
   }
 }
