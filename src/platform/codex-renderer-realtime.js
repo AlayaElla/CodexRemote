@@ -23,6 +23,10 @@ function selectedWindowTask() {
 }
 
 const eligibleUrl = url => /^app:\/\/-\/(?:index|detached-window)\.html(?:\?|$)/.test(url || '') && !/global-dictation/.test(url || '');
+const emptyDetachedShell = url => {
+  const parsed = new URL(url);
+  return parsed.pathname === '/detached-window.html' && parsed.searchParams.get('initialRoute') === '/detached-window';
+};
 const inactive = () => ({ active: false, connected: false, state: 'ended' });
 
 class CodexRendererRealtime {
@@ -76,7 +80,12 @@ class CodexRendererRealtime {
         const initial = assets.names.filter(name => /^app-initial-[\w-]+\.js$/.test(name));
         if (initial.length !== 1) throw new Error('Codex 原生語音資源結構已變更，無法安全啟動即時語音。');
         this.profile = buildNativeVoiceProfile({ initialName: initial[0], initialText: assets.read(initial[0]) });
-        this.windows = (await connection.windows()).filter(window => eligibleUrl(window.webContents.getURL()));
+        // Owl creates an empty detached shell without a native voice service.
+        // Match the main-process adapter's exclusion while retaining task windows.
+        this.windows = (await connection.windows()).filter(window => {
+          const url = window.webContents.getURL();
+          return eligibleUrl(url) && !emptyDetachedShell(url);
+        });
         if (generation !== this.generation || this.closed) throw new Error('Codex renderer connection was cancelled.');
         this.connection = connection;
         this.target = verifiedTarget;
