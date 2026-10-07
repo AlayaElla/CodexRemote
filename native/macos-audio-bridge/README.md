@@ -10,8 +10,11 @@ Build prerequisites on a real Mac:
 ```sh
 brew install opus pkg-config
 swift build --package-path native/macos-audio-bridge -c release
-node scripts/check-macos-audio-bridge.js
 ```
+
+In a development checkout that retains the local test scripts, run
+`node scripts/check-macos-audio-bridge.js` for JSONL protocol validation.
+Test scripts are kept locally and excluded from Git.
 
 The product is
 `native/macos-audio-bridge/.build/release/CodexRemoteMacAudioBridge`.
@@ -25,8 +28,8 @@ This source compiles and links against the system/Homebrew libopus during the
 bring-up phase. Release packaging must bundle and sign a compatible libopus,
 then pass the macOS real-device gate before the app advertises support.
 
-The GitHub Actions workflow `macOS audio bridge checks` builds the helper and
-runs JSONL validation without opening an audio device. It does not validate
+The GitHub Actions workflow `macOS audio bridge build` builds the helper.
+It does not validate
 BlackHole playback, Codex recording, or Intel/Apple Silicon release packaging.
 The workflow must actually run before its build can be reported as passing.
 

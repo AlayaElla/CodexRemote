@@ -1,6 +1,6 @@
 namespace VirtualMicroBroker;
 
-internal static class InstallerMessages
+internal static partial class InstallerMessages
 {
     internal static string Blocked(DriverSetupStatus output) => output.State switch
     {
@@ -19,19 +19,5 @@ internal static class InstallerMessages
         _ => "驱动安装未完成。\n" + Bound(output.Message)
     };
 
-    internal static void RunSelfTests()
-    {
-        Check(Blocked(new("unsupported", "", false, false)).Contains("Windows 11"), "unsupported block message");
-        Check(Blocked(new("unsigned_package", "", false, false, PackagePresent: true)).Contains("本地开发签名"), "unsigned block message");
-        Check(Blocked(new("missing_package", "", false, false)).Contains("driver"), "missing block message");
-        Check(InstallResult(new("installed", "", true, true, PackagePresent: true, SignatureValid: true, Success: true)).Contains("安装完成"), "installed result message");
-        Check(InstallResult(new("reboot_required", "", true, false, RebootRequired: true, PackagePresent: true, SignatureValid: true, Success: true)).Contains("重启"), "reboot result message");
-        Check(InstallResult(new("cancelled", "", false, false, Cancelled: true)).Contains("取消"), "cancel result message");
-    }
-
     internal static string Bound(string message) => message.Length <= 512 ? message : message[..512];
-    private static void Check(bool condition, string name)
-    {
-        if (!condition) throw new InvalidOperationException("安装器自测失败：" + name);
-    }
 }

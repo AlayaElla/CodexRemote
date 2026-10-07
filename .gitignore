@@ -4,6 +4,7 @@ node_modules/
 .env.*
 *.log
 .tmp/
+.codex-tmp/
 
 # Build and packaging output
 build/
@@ -30,8 +31,13 @@ Thumbs.db
 
 # Local tests and validation records
 /test/
+/scripts/tests/
+/scripts/check-macos-audio-bridge.js
+/scripts/check-realtime-audio-bridge.js
+*.test.*
+*.spec.*
 /native/**/tests/
-/native/**/*SelfTests.cs
+/native/**/*Tests.cs
 /docs/*validation*.md
 /docs/*test-guide*.md
 /docs/*-plan.md

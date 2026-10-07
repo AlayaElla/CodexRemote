@@ -1,11 +1,9 @@
-name: macOS audio bridge checks
+name: macOS audio bridge build
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - 'native/macos-audio-bridge/**'
-      - 'scripts/check-macos-audio-bridge.js'
-      - 'scripts/tests/macos-*.test.js'
       - 'src/**'
       - '.github/workflows/macos-audio-bridge.yml'
 permissions:
@@ -16,16 +14,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Install build dependencies
         run: brew install opus pkg-config
-      - name: Install JavaScript dependencies without packaging
-        run: npm ci --ignore-scripts
-      - name: Check Mac controller and local socket contracts
-        run: node --test scripts/tests/macos-*.test.js
       - name: Build native audio helper
         run: swift build --package-path native/macos-audio-bridge -c release
-      - name: Check JSONL protocol without an audio device
-        run: node scripts/check-macos-audio-bridge.js

@@ -86,7 +86,7 @@ native/macos-audio-bridge/.build/release/CodexRemoteMacAudioBridge
 状态流端点及 renderer 导出解析依据本机安装的 Codex 26.915.4065.0 共享源码确认，
 仍必须用目标 Mac 的实际安装包核验。客户端升级后解析失败会明确报错，不猜测替代接口。
 
-开发检查（不打包）：
+本地开发检查（不打包；测试脚本仅保留在本地开发目录，不随 Git 分发）：
 
 ```sh
 node --test scripts/tests/macos-*.test.js
@@ -104,7 +104,7 @@ node scripts/check-macos-audio-bridge.js
 - macOS socket 缩短文件名并检查 103 字节路径上限，设置仅当前用户读写权限。
 - macOS 进程路径按大小写精确校验；Windows 保留忽略大小写的比较。
 - 增加 `scripts/check-macos-audio-bridge.js`：检查 JSONL 请求、无会话操作、坏 UTF-8、超长行和不完整 EOF，不播放音频。
-- 增加 GitHub Actions macOS 编译及协议检查工作流。目前仅写入仓库，尚未运行。
+- GitHub Actions 工作流执行 macOS 编译，协议检查使用本地测试脚本执行。
 
 ## 第三阶段：功能路径接入
 
