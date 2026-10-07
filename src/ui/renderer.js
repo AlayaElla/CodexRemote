@@ -32,10 +32,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const heading = document.createElement('p');
     heading.className = 'font-body-main text-body-main font-semibold text-on-surface';
     heading.textContent = title;
-    const detail = document.createElement('p');
-    detail.className = 'mt-0.5 font-body-sm text-body-sm text-on-surface-variant';
-    detail.textContent = message;
-    content.append(heading, detail);
+    content.appendChild(heading);
+    if (message && message !== title) {
+      const detail = document.createElement('p');
+      detail.className = 'mt-0.5 font-body-main text-body-main text-on-surface-variant';
+      detail.textContent = message;
+      content.appendChild(detail);
+    }
 
     const closeButton = document.createElement('button');
     closeButton.type = 'button';
@@ -196,9 +199,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const label = document.getElementById('voice-audio-platform-label');
     if (label) label.textContent = 'macOS 音频通道';
     if (voiceMicroAudioDevice?.options[0]) voiceMicroAudioDevice.options[0].textContent = automaticAudioLabel;
-    if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = '安装 BlackHole 并刷新；Codex 麦克风选择同一 BlackHole 设备。';
+    if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = '等待检测 BlackHole';
     if (btnRefreshVirtualMicroDriver) btnRefreshVirtualMicroDriver.classList.add('hidden');
-    if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = 'macOS 使用本机 Codex 控制接口，连接状态见下方。';
+    if (voiceVirtualMicroDriverStatus) voiceVirtualMicroDriverStatus.textContent = '使用 macOS 原生连接';
     virtualMicroDriverChecked = true;
   }
 
@@ -266,11 +269,11 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceMicroAudioDevice.value = selected;
       }
       if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = macHost
-        ? devices.length ? '已检测到音频通道。Codex 麦克风选择同一 BlackHole 设备后保存。'
-          : '未检测到 BlackHole。安装并刷新后，Codex 麦克风选择同一 BlackHole 设备。'
+        ? devices.length ? 'BlackHole 可用'
+          : '未检测到 BlackHole，请安装后刷新。'
         : devices.length
-        ? '已检测到音频通道。Codex 麦克风选择对应的 CABLE Output 后保存。'
-        : '未检测到 VB-CABLE。安装并刷新后，Codex 麦克风选择 CABLE Output。';
+        ? 'VB-CABLE 可用'
+        : '未检测到 VB-CABLE，请安装后刷新。';
     } catch (error) {
       if (voiceEsp32AudioDevicesStatus) voiceEsp32AudioDevicesStatus.textContent = error.message;
     } finally {
@@ -453,17 +456,17 @@ document.addEventListener('DOMContentLoaded', () => {
       if (current && !devices.some(device => device.id === current)) {
         select.appendChild(new Option('已保存的回答音频设备（当前不可用）', current));
         select.value = current;
-        status.textContent = '已保存的回答音频设备当前不可用。已保留原配置；请在设备恢复后刷新，或另选设备后保存。';
+        status.textContent = '原设备不可用，已保留原配置；请刷新或重新选择。';
       } else if (current) {
         select.value = current;
-        status.textContent = '已保留已保存的回答音频设备。请确认它只供 Codex 回答使用。';
+        status.textContent = '已保留回答音频设备';
       } else if (recommended.length === 1) {
         select.value = recommended[0].id;
-        status.textContent = '已选中 Stream To Speaker；点击“保存语音设置”后生效。通话时会自动启动原版服务。';
+        status.textContent = '已选择 Stream To Speaker，请保存语音设置。';
       } else if (recommended.length === 0) {
-        status.textContent = '未检测到 Stream To Speaker。请安装原版程序后刷新，或选择其他专属输出。';
+        status.textContent = '未检测到 Stream To Speaker，请安装后刷新。';
       } else {
-        status.textContent = '检测到多个 Stream To Speaker，请保留一个启用的设备后刷新。';
+        status.textContent = '多个 Stream To Speaker 可用，请选择一个。';
       }
     } catch (error) {
       if (generation === realtimeAudioRefreshGeneration) status.textContent = error.message;
@@ -599,7 +602,7 @@ document.addEventListener('DOMContentLoaded', () => {
           throw new Error(result && result.error ? result.error : '语音设置保存失败。');
         }
         populateVoiceConfig(result.config);
-        showNotice({ title: '语音设置已保存', message: '所选语音输入方式和参数已应用。' });
+        showNotice({ title: '语音设置已保存' });
       } catch (error) {
         showNotice({
           title: '语音设置保存失败',
@@ -706,7 +709,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusDotHero = document.getElementById('status-dot-hero');
   const statusTextHero = document.getElementById('status-text-hero');
   const deviceNameHero = document.getElementById('device-name-hero');
-  const heroPortLabel = document.getElementById('hero-port-label');
   const metricWsPort = document.getElementById('metric-ws-port');
   const metricCodex = document.getElementById('metric-codex-status');
   const metricCodexDebug = document.getElementById('metric-codex-debug');
@@ -715,29 +717,48 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnLaunchDebug = document.getElementById('btn-launch-debug');
   const btnRetryDebug = document.getElementById('btn-retry-debug');
   let codexLaunchUiPending = false;
+  let latestCodexDebug = null;
+  let codexDesktopConnected = false;
+  let codexActionMessage = '';
   btnLaunchDebug?.addEventListener('click', async () => {
-    if (codexLaunchUiPending) return;
+    if (codexLaunchUiPending || codexDesktopConnected) return;
     codexLaunchUiPending = true;
     btnLaunchDebug.disabled = true;
     if (btnRetryDebug) btnRetryDebug.disabled = true;
-    metricCodexDebugDetail.textContent = '正在启动或重启 Codex…';
+    codexActionMessage = '正在启动 / 重启 Codex…';
+    updateCodexDebugMetric(latestCodexDebug);
     try {
       const result = await window.electronAPI.launchCodexDebug();
-      metricCodexDebugDetail.textContent = result?.success
-        ? result.restarted ? 'Codex 已重新启动，正在连接…' : 'Codex 正在启动，连接后会自动更新状态。'
+      codexActionMessage = result?.success
+        ? result.restarted ? 'Codex 已重新启动，正在连接…' : 'Codex 已启动，正在连接…'
         : result?.error || '启动失败，请重试。';
-    } catch (error) { metricCodexDebugDetail.textContent = error.message; }
+    } catch (error) { codexActionMessage = error.message; }
     finally {
       codexLaunchUiPending = false;
       btnLaunchDebug.disabled = false;
       if (btnRetryDebug) btnRetryDebug.disabled = false;
+      updateCodexDebugMetric(latestCodexDebug);
     }
   });
   btnRetryDebug?.addEventListener('click', async () => {
+    if (codexLaunchUiPending || codexDesktopConnected) return;
+    codexLaunchUiPending = true;
     btnRetryDebug.disabled = true;
-    try { await window.electronAPI.retryCodexDebug(); }
-    catch (error) { metricCodexDebugDetail.textContent = error.message; }
-    finally { btnRetryDebug.disabled = false; }
+    if (btnLaunchDebug) btnLaunchDebug.disabled = true;
+    codexActionMessage = '正在重新连接…';
+    updateCodexDebugMetric(latestCodexDebug);
+    try {
+      const result = await window.electronAPI.retryCodexDebug();
+      if (result?.success === false) throw new Error(result.error || '连接失败，请重试。');
+      codexActionMessage = '';
+    }
+    catch (error) { codexActionMessage = error.message; }
+    finally {
+      codexLaunchUiPending = false;
+      btnRetryDebug.disabled = false;
+      if (btnLaunchDebug) btnLaunchDebug.disabled = false;
+      updateCodexDebugMetric(latestCodexDebug);
+    }
   });
   const metricStt = document.getElementById('metric-stt-status');
   const activityList = document.getElementById('activity-list');
@@ -884,7 +905,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Update Status UI
   function updateStatusUI(status) {
-    updateCodexDebugMetric(status.codexDebug);
     updateCodexHookInstallUI(status.codexHook);
     if (status.connectedDevice) {
       setConnectedState(true, status.connectedDevice);
@@ -900,15 +920,10 @@ document.addEventListener('DOMContentLoaded', () => {
       : status.wsPort
         ? `未检测到局域网 IP · 端口 ${status.wsPort}`
         : '服务未启动';
-    if (heroPortLabel) {
-      const connectionTitle = lanAddresses.length > 1
-        ? `本机局域网地址：${lanAddresses.map((address) => `${address}:${status.wsPort}`).join('、')}`
-        : connectionLabel;
-      if (heroPortLabel.textContent !== connectionLabel) heroPortLabel.textContent = connectionLabel;
-      if (heroPortLabel.title !== connectionTitle) heroPortLabel.title = connectionTitle;
-    }
     if (metricWsPort) {
-      const metricTitle = heroPortLabel ? heroPortLabel.title : connectionLabel;
+      const metricTitle = lanAddresses.length > 1
+        ? lanAddresses.map((address) => `${address}:${status.wsPort}`).join('、')
+        : connectionLabel;
       if (metricWsPort.textContent !== connectionLabel) metricWsPort.textContent = connectionLabel;
       if (metricWsPort.title !== metricTitle) metricWsPort.title = metricTitle;
     }
@@ -918,17 +933,15 @@ document.addEventListener('DOMContentLoaded', () => {
     setMetricState(metricCodex, status.isRestartingServices
       ? { icon: 'progress_activity', label: '正在重启', tone: 'neutral' }
       : desktopAvailable
-        ? { icon: 'check_circle', label: 'Codex 已连接', tone: 'success' }
-        : { icon: 'error', label: desktopControl.supported ? '等待 Codex 连接' : '当前系统不支持', tone: 'neutral' });
+        ? { icon: 'check_circle', label: '已连接', tone: 'success' }
+        : { icon: 'schedule', label: desktopControl.supported ? '等待连接' : '当前系统不支持', tone: 'neutral' });
+    updateCodexDebugMetric(status.isRestartingServices ? null : status.codexDebug, desktopAvailable && !status.isRestartingServices);
 
     if (serviceConfigStatus) {
       if (status.isRestartingServices) {
         serviceConfigStatus.textContent = '正在重启后台服务...';
       } else if (status.isWsServerRunning && status.isCodexBridgeRunning) {
-        const desktopStatusLabel = desktopAvailable
-          ? 'Codex 已连接'
-          : '等待 Codex 连接';
-        serviceConfigStatus.textContent = `服务运行中 · 设备 WebSocket ${status.wsPort} · ${desktopStatusLabel}`;
+        serviceConfigStatus.textContent = '服务运行中';
       } else {
         serviceConfigStatus.textContent = '部分服务未运行，请检查系统日志。';
       }
@@ -951,7 +964,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const canRetry = !isApi && !micro.connected && !micro.connecting;
     const voiceLabel = isApi
       ? 'API 转写' + (status.voiceApiConfigured ? '' : '（未配置密钥）')
-      : '虚拟 Codex Micro' + (micro.connected ? ' · 已连接' : micro.connecting ? ' · 连接中' : ' · 未就绪 · 点击重试');
+      : 'Codex Micro' + (micro.connected ? ' · 已连接' : micro.connecting ? ' · 连接中' : ' · 重试连接');
     metricStt.disabled = !canRetry;
     metricStt.title = canRetry ? '未就绪，点击重试连接虚拟 Codex Micro' : '';
     metricStt.setAttribute('aria-label', canRetry ? '虚拟 Codex Micro 未就绪，点击重试连接' : voiceLabel);
@@ -968,24 +981,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
   bindVoiceInputRetry();
 
-  function updateCodexDebugMetric(debug) {
+  function updateCodexDebugMetric(debug, connected = codexDesktopConnected) {
     if (!metricCodexDebug || !metricCodexDebugDetail) return;
-    metricCodexDebug.hidden = !debug;
-    metricCodexDebugDetail.hidden = !debug;
-    if (codexDebugActions) codexDebugActions.hidden = !debug;
-    if (!debug) return;
+    if (!codexLaunchUiPending && latestCodexDebug?.stage !== debug?.stage) codexActionMessage = '';
+    latestCodexDebug = debug;
+    codexDesktopConnected = connected;
+    if (connected) codexActionMessage = '';
+    const needsConnection = Boolean(debug) && !connected;
+    if (metricCodex) metricCodex.hidden = needsConnection;
+    metricCodexDebug.hidden = !needsConnection;
+    if (codexDebugActions) codexDebugActions.hidden = !needsConnection;
+    const detail = needsConnection
+      ? codexActionMessage || (debug.stage === 'error' ? debug.message : '')
+      : '';
+    metricCodexDebugDetail.textContent = detail;
+    metricCodexDebugDetail.hidden = !detail;
+    if (!needsConnection) return;
     const states = {
-      waiting: { icon: 'schedule', label: '调试：等待 Codex', tone: 'neutral' },
-      locating: { icon: 'progress_activity', label: '调试：正在检测', tone: 'neutral' },
-      activating: { icon: 'progress_activity', label: '调试：正在开启', tone: 'neutral' },
-      restarting: { icon: 'progress_activity', label: 'Codex：正在启动或重启', tone: 'neutral' },
-      checking: { icon: 'progress_activity', label: '调试：正在验证', tone: 'neutral' },
-      ready: { icon: 'check_circle', label: '调试：已开启', tone: 'success' },
-      setup: { icon: 'info', label: '调试：需要重新启动', tone: 'warning' },
-      error: { icon: 'error', label: '调试：开启失败', tone: 'warning' }
+      waiting: { icon: 'schedule', label: '等待 Codex 启动', tone: 'neutral' },
+      locating: { icon: 'progress_activity', label: '检测中', tone: 'neutral' },
+      activating: { icon: 'progress_activity', label: '连接中', tone: 'neutral' },
+      restarting: { icon: 'progress_activity', label: '启动中', tone: 'neutral' },
+      checking: { icon: 'progress_activity', label: '验证中', tone: 'neutral' },
+      ready: { icon: 'progress_activity', label: '连接中', tone: 'neutral' },
+      setup: { icon: 'info', label: '需要重启', tone: 'warning' },
+      error: { icon: 'error', label: '连接失败', tone: 'warning' }
     };
     setMetricState(metricCodexDebug, states[debug.stage] || states.waiting);
-    if (!codexLaunchUiPending) metricCodexDebugDetail.textContent = debug.message || '';
   }
 
   function setMetricState(element, { icon, label, tone }) {
@@ -999,7 +1021,7 @@ document.addEventListener('DOMContentLoaded', () => {
     element.replaceChildren();
 
     const iconElement = document.createElement('span');
-    iconElement.className = 'material-symbols-outlined text-[14px]';
+    iconElement.className = 'material-symbols-outlined text-[16px]';
     iconElement.setAttribute('aria-hidden', 'true');
     iconElement.textContent = icon;
     element.append(iconElement, document.createTextNode(label));
@@ -1012,8 +1034,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const dotClassName = isConnected
       ? 'w-2.5 h-2.5 rounded-full bg-success status-dot-pulse'
       : 'w-2.5 h-2.5 rounded-full bg-outline';
-    const statusText = isConnected ? `已连接 · ${address}` : '等待硬件设备连接...';
-    const deviceName = isConnected ? `终端 ${address}` : '未绑定遥控终端';
+    const statusText = isConnected ? `已连接 · ${address}` : '等待连接';
+    const deviceName = '遥控终端';
     if (isConnected) {
       if (statusDotHero) {
         if (statusDotHero.className !== dotClassName) statusDotHero.className = dotClassName;
@@ -1032,7 +1054,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function addActivityItem(title, text) {
     if (!activityList) return;
     totalActivityCount++;
-    if (activityCount) activityCount.textContent = `共 ${totalActivityCount} 条记录`;
+    if (activityCount) activityCount.textContent = `${totalActivityCount} 条`;
 
     const item = document.createElement('div');
     item.className = 'activity-item';

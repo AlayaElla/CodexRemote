@@ -40,15 +40,11 @@
       <div class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/50 to-transparent opacity-50"></div>
       <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative z-10">
         <div class="space-y-1">
-          <h1 class="font-headline-display text-headline-display text-on-surface" id="device-name-hero">未绑定遥控终端</h1>
+          <h1 class="font-headline-display text-headline-display text-on-surface" id="device-name-hero">遥控终端</h1>
           <div class="flex items-center gap-2 text-on-surface-variant font-body-sm text-body-sm">
             <div class="w-2 h-2 rounded-full bg-outline" id="status-dot-hero"></div>
-            <span id="status-text-hero">等待硬件设备连接...</span>
+            <span id="status-text-hero" role="status" aria-live="polite">等待连接</span>
           </div>
-        </div>
-      <div class="bg-primary-container text-on-primary-container px-3 py-1.5 rounded-full font-body-main text-body-sm font-medium flex items-center gap-2 border border-primary/20">
-          <span class="material-symbols-outlined text-[16px]" data-icon="router">router</span>
-          <span id="hero-port-label">正在读取本机 IP...</span>
         </div>
       </div>
       <div class="absolute -right-12 -bottom-12 opacity-5 pointer-events-none group-hover:opacity-10 transition-opacity duration-700">
@@ -63,10 +59,10 @@
         <div class="absolute top-0 left-0 w-full h-[1px] bg-white/40"></div>
         <div class="flex items-center gap-2 text-on-surface-variant">
           <span class="material-symbols-outlined" data-icon="leak_add">leak_add</span>
-          <h3 class="font-body-main text-body-main font-medium">本机连接地址</h3>
+          <h3 class="font-body-main text-body-main font-medium">设备连接地址</h3>
         </div>
         <div class="status-chip is-neutral" id="metric-ws-port">
-          正在读取本机 IP...
+          读取中…
         </div>
       </div>
 
@@ -75,20 +71,20 @@
         <div class="absolute top-0 left-0 w-full h-[1px] bg-white/40"></div>
         <div class="flex items-center gap-2 text-on-surface-variant">
           <span class="material-symbols-outlined" data-icon="cable">cable</span>
-          <h3 class="font-body-main text-body-main font-medium">Codex 桥接监听</h3>
+          <h3 class="font-body-main text-body-main font-medium">Codex 连接</h3>
         </div>
-        <div class="flex items-center gap-2">
-          <div class="status-chip is-success" id="metric-codex-status">
-            <span class="material-symbols-outlined text-[14px]" data-icon="check_circle">check_circle</span>
-            正常就绪
+        <div class="flex flex-wrap items-center gap-2" role="status" aria-live="polite">
+          <div class="status-chip is-neutral" id="metric-codex-status">
+            <span class="material-symbols-outlined text-[16px]" data-icon="schedule">schedule</span>
+            检测中
           </div>
           <div class="status-chip is-neutral" id="metric-codex-debug" role="status" aria-live="polite" hidden>正在检测调试状态</div>
         </div>
-        <p id="metric-codex-debug-detail" class="font-body-sm text-body-sm text-on-surface-variant" hidden></p>
+        <p id="metric-codex-debug-detail" class="font-body-main text-body-main text-on-surface-variant" role="status" aria-live="polite" hidden></p>
         <div id="codex-debug-actions" class="flex flex-wrap items-center gap-2" hidden>
-          <button type="button" class="status-chip is-primary" id="btn-launch-debug">启动或重启 Codex 并连接</button>
-          <button type="button" class="status-chip is-primary" id="btn-retry-debug">重试连接</button>
-          <p class="w-full font-body-sm text-body-sm text-on-surface-variant">重启会关闭当前 Codex，并可能中断正在执行的任务，请先保存工作。</p>
+          <button type="button" class="button-primary" id="btn-launch-debug">启动 / 重启 Codex</button>
+          <button type="button" class="button-secondary" id="btn-retry-debug">重试连接</button>
+          <p class="w-full font-body-main text-body-main text-on-surface-variant">重启会中断任务，请先保存工作。</p>
         </div>
       </div>
 
@@ -101,7 +97,7 @@
         </div>
         <button type="button" class="status-chip is-primary" id="metric-stt-status" disabled aria-label="语音输入状态">
           <span class="material-symbols-outlined text-[14px]" data-icon="bolt">bolt</span>
-          Ctrl+Shift+R
+          检测中
         </button>
       </div>
     </section>
@@ -112,9 +108,9 @@
       <div class="p-5 border-b border-outline-variant/30 flex justify-between items-center bg-surface-container-lowest z-10 sticky top-0">
         <div class="flex items-center gap-2">
           <span class="material-symbols-outlined text-on-surface-variant" data-icon="history">history</span>
-          <h2 class="font-headline-section text-headline-section text-on-surface">最近系统动态</h2>
+          <h2 class="font-headline-section text-headline-section text-on-surface">最近动态</h2>
         </div>
-        <span class="font-body-sm text-body-sm text-on-surface-variant bg-surface-container-high px-2.5 py-1 rounded-full" id="activity-count">共 1 条记录</span>
+        <span class="font-body-sm text-body-sm text-on-surface-variant bg-surface-container-high px-2.5 py-1 rounded-full" id="activity-count">1 条</span>
       </div>
 
       <!-- Timeline Content -->
@@ -129,7 +125,7 @@
               <span class="font-body-main text-body-sm text-on-surface-variant opacity-70">初始化</span>
               <span class="font-body-sm text-caption-mono text-on-info-container bg-info-container px-1.5 py-0.5 rounded border border-info/20">[系统]</span>
             </div>
-            <p class="font-body-sm text-body-sm text-on-surface">Codex 远程控制桌面端服务就绪。</p>
+            <p class="font-body-main text-body-main text-on-surface">服务已启动</p>
           </div>
         </div>
       </div>
@@ -178,28 +174,27 @@
       <div class="sub-tab-content active space-y-6 max-w-2xl" id="subtab-config">
         <div class="space-y-1">
           <h3 class="font-headline-section text-headline-section text-on-surface">基础配置</h3>
-          <p class="font-body-sm text-body-sm text-on-surface-variant">修改后重启服务生效。</p>
         </div>
 
         <div class="p-5 bg-surface-container-lowest border border-outline-variant/50 rounded-lg space-y-5">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div class="space-y-2">
-              <label class="font-body-main text-body-sm font-medium text-on-surface block" for="service-ws-port">WebSocket 通信端口</label>
+              <label class="font-body-main text-body-main font-medium text-on-surface block" for="service-ws-port">设备端口</label>
               <input type="number" min="1024" max="65535" step="1" id="service-ws-port" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-main text-on-surface focus:outline-none focus:border-primary"/>
             </div>
             <div class="space-y-2">
-              <label class="font-body-main text-body-sm font-medium text-on-surface block" for="service-hook-port">Codex 钩子端口</label>
+              <label class="font-body-main text-body-main font-medium text-on-surface block" for="service-hook-port">Codex 事件端口</label>
               <input type="number" min="1024" max="65535" step="1" id="service-hook-port" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-main text-on-surface focus:outline-none focus:border-primary"/>
             </div>
           </div>
 
           <div class="space-y-2">
-            <label class="font-body-main text-body-sm font-medium text-on-surface block" for="service-token">设备认证 Token</label>
+            <label class="font-body-main text-body-main font-medium text-on-surface block" for="service-token">设备连接码</label>
             <div class="flex items-center gap-2">
-              <input type="text" id="service-token" maxlength="16" autocomplete="off" class="min-w-0 flex-1 bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-main text-on-surface focus:outline-none focus:border-primary"/>
+              <input type="text" id="service-token" maxlength="16" autocomplete="off" placeholder="与设备上的连接码一致" class="min-w-0 flex-1 bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-main text-on-surface focus:outline-none focus:border-primary"/>
               <button type="button" id="btn-generate-service-token" class="button-secondary shrink-0">自动生成</button>
             </div>
-            <p class="font-body-sm text-body-sm text-on-surface-variant">在设备端填入相同 Token（1–16 位，自动生成 16 位）。</p>
+            <details class="ui-help"><summary>连接码用法</summary><p>电脑和设备使用相同的连接码，长度为 1–16 位。</p></details>
           </div>
 
           <div class="space-y-2">
@@ -210,30 +205,33 @@
             </select>
           </div>
 
-          <div class="space-y-2">
+          <details class="ui-help">
+            <summary>事件设置</summary>
+          <div class="space-y-2 pt-4">
             <label class="font-body-main text-body-sm font-medium text-on-surface block" for="service-collector-type">Agent 事件采集器</label>
             <select id="service-collector-type" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-4 py-2.5 font-body-main text-body-sm text-on-surface focus:outline-none focus:border-primary">
               <option value="codex-hooks">Codex Hooks</option>
             </select>
           </div>
 
-          <div class="p-4 rounded-lg border border-outline-variant/40 bg-surface-container-low space-y-2">
+          <div class="mt-4 p-4 rounded-lg border border-outline-variant/40 bg-surface-container-low space-y-2">
             <div class="flex items-center justify-between gap-3">
               <span class="font-body-main text-body-sm font-medium text-on-surface">Codex Hook 安装状态</span>
               <span id="codex-hook-install-status" class="font-body-sm text-body-sm text-on-surface-variant">正在检查...</span>
             </div>
-            <p id="codex-hook-install-path" class="font-body-sm text-body-sm text-on-surface-variant break-all"></p>
+            <details class="ui-help"><summary>配置位置</summary><p id="codex-hook-install-path" class="break-all"></p></details>
             <button type="button" id="btn-repair-codex-hooks" class="mt-1 px-4 py-2 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface font-body-main text-body-sm font-medium hover:bg-surface-container-high transition-colors inline-flex items-center gap-2">
               <span class="material-symbols-outlined text-[18px]" aria-hidden="true">build</span>
               <span>检查并修复 Hook</span>
             </button>
           </div>
+          </details>
 
           <div class="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-outline-variant/30">
             <p class="pt-4 font-body-sm text-body-sm text-on-surface-variant" id="service-config-status">正在读取服务状态...</p>
             <button type="button" class="button-primary mt-4 px-5 text-body-main shrink-0" id="btn-restart-services">
               <span class="material-symbols-outlined text-[18px] service-restart-icon" aria-hidden="true">restart_alt</span>
-              <span>重启服务</span>
+              <span>保存并重启服务</span>
             </button>
           </div>
         </div>
@@ -255,8 +253,7 @@
 
           <section id="voice-api-pane" class="hidden space-y-4 border-t border-outline-variant/30 pt-4">
             <div class="space-y-2">
-              <h4 class="font-body-main text-body-main font-medium text-on-surface">API 转写</h4>
-              <p class="font-body-sm text-body-sm text-on-surface-variant">需兼容 OpenAI <code>/audio/transcriptions</code>；转写后自动提交到 ChatGPT Desktop。</p>
+              <details class="ui-help"><summary>API 要求</summary><p>兼容 OpenAI <code>/audio/transcriptions</code>；转写后提交到 ChatGPT Desktop。</p></details>
             </div>
             <label class="space-y-1 block" for="voice-api-base-url">
               <span class="font-body-sm text-body-sm text-on-surface-variant">Base URL</span>
@@ -290,8 +287,7 @@
 
           <section id="voice-virtual-micro-pane" class="hidden space-y-4 border-t border-outline-variant/30 pt-4">
             <div class="space-y-2">
-              <h4 class="font-body-main text-body-main font-medium text-on-surface">虚拟 Codex Micro</h4>
-              <p class="font-body-sm text-body-sm text-on-surface-variant">使用 Codex 原生听写。连接后按住说话，松开后在 Codex 确认并发送。</p>
+              <details class="ui-help"><summary>听写用法</summary><p>按住说话，松开后在 Codex 确认并发送。</p></details>
             </div>
             <label class="space-y-1 block" for="voice-micro-audio-source">
               <span class="font-body-sm text-body-sm font-medium text-on-surface">麦克风来源</span>
@@ -308,16 +304,17 @@
                 </select>
               </label>
               <button type="button" id="btn-refresh-esp32-audio" class="button-secondary px-3">刷新音频设备</button>
-              <p id="voice-esp32-audio-devices-status" class="font-body-sm text-body-sm text-on-surface-variant">安装 VB-CABLE 并刷新；Codex 麦克风选择 CABLE Output。</p>
+              <p id="voice-esp32-audio-devices-status" class="font-body-main text-body-main text-on-surface-variant" aria-live="polite">等待检测音频设备</p>
+              <details class="ui-help"><summary>音频设置</summary><p>Windows：安装 VB-CABLE，Codex 麦克风选择 CABLE Output。macOS：安装 BlackHole，Codex 麦克风选择同一 BlackHole 设备。</p><p>回答输出与麦克风使用不同通道。回答期间暂停麦克风上传。</p></details>
               <p id="voice-esp32-audio-status" class="font-body-sm text-body-sm text-on-surface-variant" aria-live="polite">等待 ESP32 音频。</p>
               <label class="space-y-1 block" for="voice-realtime-output">
-                <span class="font-body-sm text-body-sm text-on-surface-variant">实时语音 · Codex 回答音频设备</span>
+                <span class="font-body-main text-body-main text-on-surface-variant">回答音频设备</span>
                 <select id="voice-realtime-output" class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg px-3 py-2 font-body-main text-body-sm text-on-surface">
                   <option value="">请选择专属输出设备</option>
                 </select>
               </label>
               <button type="button" id="btn-refresh-realtime-audio" class="button-secondary px-3">刷新回答音频设备</button>
-              <p id="voice-realtime-status" class="font-body-sm text-body-sm text-on-surface-variant" aria-live="polite">刷新后选择 Stream To Speaker 并保存；通话时自动启动原版服务。回答输出与麦克风注入必须使用不同音频通道；当前使用轮流说话，回答期间暂停麦克风上传。</p>
+              <p id="voice-realtime-status" class="font-body-main text-body-main text-on-surface-variant" aria-live="polite">选择 Stream To Speaker 后保存</p>
             </div>
             <div class="rounded-lg bg-surface-container-low px-4 py-3 space-y-1" aria-live="polite">
               <p class="font-body-sm text-body-sm text-on-surface" id="voice-virtual-micro-status">尚未连接 Micro。</p>
@@ -329,9 +326,9 @@
             <div class="rounded-lg border border-outline-variant/40 px-4 py-3 space-y-2" aria-live="polite">
               <div class="flex flex-wrap items-center gap-3">
                 <button type="button" id="btn-refresh-virtual-micro-driver" class="button-secondary px-3">刷新驱动状态</button>
-                <span class="font-body-sm text-body-sm text-on-surface-variant">首次使用需安装独立驱动，再刷新状态。</span>
               </div>
               <p class="font-body-sm text-body-sm text-on-surface-variant" id="voice-virtual-micro-driver-status">等待检查驱动。</p>
+              <details class="ui-help"><summary>驱动安装</summary><p>首次使用安装独立驱动，然后刷新状态。</p></details>
             </div>
             <div class="flex flex-wrap gap-3">
               <button type="button" id="btn-connect-virtual-micro" class="button-secondary">检查并连接</button>
@@ -396,7 +393,6 @@
         <section class="space-y-4 border-t border-outline-variant/40 pt-4" aria-labelledby="lab-uplink-title">
           <div>
             <h4 id="lab-uplink-title" class="font-body-main text-body-main font-semibold text-on-surface">ESP32 → PC</h4>
-            <p class="font-body-sm text-body-sm text-on-surface-variant">模拟上行消息</p>
           </div>
           <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
             <button type="button" class="button-secondary justify-start" id="sim-voice-start"><span class="material-symbols-outlined text-[18px]" aria-hidden="true">mic</span><span>开始说话</span></button>
@@ -422,7 +418,6 @@
           <div class="flex items-center justify-between gap-3">
             <div>
               <h4 id="lab-traffic-title" class="font-body-main text-body-main font-semibold text-on-surface">协议消息</h4>
-              <p class="font-body-sm text-body-sm text-on-surface-variant">最近 50 条</p>
             </div>
             <button type="button" id="btn-clear-device-traffic" class="icon-button" title="清空协议消息" aria-label="清空协议消息">
               <span class="material-symbols-outlined" aria-hidden="true">delete_sweep</span>

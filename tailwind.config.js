@@ -88,9 +88,9 @@ module.exports = {
       fontSize: {
         'label-mono': ['12px', { lineHeight: '16px', letterSpacing: '0', fontWeight: '500' }],
         'headline-display': ['22px', { lineHeight: '28px', letterSpacing: '0', fontWeight: '600' }],
-        'body-sm': ['13px', { lineHeight: '19px', letterSpacing: '0', fontWeight: '400' }],
-        'caption-mono': ['11px', { lineHeight: '14px', letterSpacing: '0', fontWeight: '400' }],
-        'body-main': ['14px', { lineHeight: '21px', letterSpacing: '0', fontWeight: '400' }],
+        'body-sm': ['14px', { lineHeight: '21px', letterSpacing: '0', fontWeight: '400' }],
+        'caption-mono': ['12px', { lineHeight: '18px', letterSpacing: '0', fontWeight: '400' }],
+        'body-main': ['15px', { lineHeight: '23px', letterSpacing: '0', fontWeight: '400' }],
         'headline-section': ['17px', { lineHeight: '24px', letterSpacing: '0', fontWeight: '600' }]
       },
       boxShadow: {
